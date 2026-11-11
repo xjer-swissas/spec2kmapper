@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+*.sqlite*
+*.zip
+uploads/
+AMOScentral/
+.agents/
+.codex/
+.aws/
