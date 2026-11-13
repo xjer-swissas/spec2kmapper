@@ -8,7 +8,7 @@ function app() {
     section: 'wizard', amosTab: 'cache', fileName: '',
     step: 1, confirmedRootPn: '',
     csvQueries: {}, csvFiles: {}, csvBusy: false,
-    amosForm: { source: 'database', host: '', port: 5432, dbname: '', user: '', password: '', refresh_interval_hours: 24 },
+    amosForm: { source: 'database', amoscentral_address: '', central: { sender_address: '', state: 'DISABLED' }, host: '', port: 5432, dbname: '', user: '', password: '', refresh_interval_hours: 24 },
     sync: { status: 'IDLE', counts: {} }, polling: false,
     uploadResult: {}, selectedRootPn: '',
     candidates: { pn_matches: {}, fp_matches: {}, doc_matches: {}, pn_children_map: {} },

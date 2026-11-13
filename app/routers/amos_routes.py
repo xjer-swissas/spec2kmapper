@@ -5,7 +5,8 @@ from sqlalchemy import text
 from app.database import get_db
 from app.auth import get_current_user
 from app.amos.sync import claim_sync, run_tenant_sync
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.exc import IntegrityError
 
 router = APIRouter(prefix="/api/amos", tags=["AMOS Settings"])
 
@@ -25,39 +26,66 @@ def rebuild_index(user: dict = Depends(get_current_user)):
 
 
 class AmosConnectionConfig(BaseModel):
-    source: Literal["database", "csv"] = "database"
-    host: str
+    source: Literal["database", "csv", "amoscentral"] = "database"
+    host: str = ""
     port: int = Field(default=5432, ge=1, le=65535)
-    dbname: str
-    user: str
+    dbname: str = ""
+    user: str = ""
     password: str = ""
     refresh_interval_hours: int = Field(default=24, ge=1)
+    amoscentral_address: str = ""
+
+    @field_validator('amoscentral_address')
+    @classmethod
+    def validate_sender_address(cls, value):
+        if value:
+            from amoscentral import validate_address
+            validate_address(value)
+        return value
 
 
 @router.get('/config')
 def get_amos_config(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     row = db.execute(text('''
-        SELECT amos_host, amos_port, amos_dbname, amos_user, refresh_interval_hours, amos_source
+        SELECT amos_host, amos_port, amos_dbname, amos_user, refresh_interval_hours, amos_source, amoscentral_address
         FROM public.tenants WHERE id = :id
     '''), {'id': user['tenant_id']}).fetchone()
     if not row:
         raise HTTPException(404, 'Tenant not found')
+    from app.amos.central import receiver
     return dict(host=row[0] or '', port=row[1] or 5432, dbname=row[2] or '',
-                user=row[3] or '', password='', refresh_interval_hours=row[4] or 24, source=row[5])
+                user=row[3] or '', password='', refresh_interval_hours=row[4] or 24, source=row[5],
+                amoscentral_address=row[6] or '', central=receiver.tenant_status(row[6] or ''))
 
 
 @router.post('/config')
 def update_amos_config(cfg: AmosConnectionConfig, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    updated = db.execute(text('''
-        UPDATE public.tenants SET amos_source=:source, amos_host=:h, amos_port=:p, amos_dbname=:d, amos_user=:u,
-            amos_password=COALESCE(NULLIF(:pwd, ''), amos_password), refresh_interval_hours=:r
-        WHERE id=:id AND last_sync_status != 'RUNNING'
-        RETURNING id
-    '''), dict(source=cfg.source, h=cfg.host, p=cfg.port, d=cfg.dbname, u=cfg.user, pwd=cfg.password,
-               r=cfg.refresh_interval_hours, id=user['tenant_id'])).fetchone()
+    if not user.get('is_admin'):
+        raise HTTPException(403, 'Tenant administrator access required')
+    if cfg.source == 'amoscentral':
+        if not cfg.amoscentral_address:
+            raise HTTPException(400, 'Enter the tenant AMOScentral sender address')
+    try:
+        updated = db.execute(text('''
+            UPDATE public.tenants SET amos_source=:source, amos_host=:h, amos_port=:p, amos_dbname=:d, amos_user=:u,
+                amos_password=COALESCE(NULLIF(:pwd, ''), amos_password), refresh_interval_hours=:r,
+                amoscentral_last_snapshot_at=CASE WHEN amoscentral_address IS DISTINCT FROM :address
+                    THEN NULL ELSE amoscentral_last_snapshot_at END, amoscentral_address=:address
+            WHERE id=:id AND last_sync_status != 'RUNNING'
+            RETURNING id
+        '''), dict(source=cfg.source, h=cfg.host, p=cfg.port, d=cfg.dbname, u=cfg.user, pwd=cfg.password,
+                   address=cfg.amoscentral_address or None, r=cfg.refresh_interval_hours, id=user['tenant_id'])).fetchone()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, 'That AMOScentral sender address is already assigned') from None
     if not updated:
         db.rollback()
         raise HTTPException(409, 'Wait for the current refresh to finish before changing the data source')
+    # Never combine fragments across a data-source switch, including a switch back.
+    db.execute(text("""
+        UPDATE public.amoscentral_batches SET status='EXPIRED', exports='{}'::jsonb
+        WHERE tenant_id=:id AND status='PENDING'
+    """), {'id': user['tenant_id']})
     db.commit()
     return {'message': 'AMOS connection settings saved'}
 
@@ -77,7 +105,7 @@ def trigger_manual_sync(background_tasks: BackgroundTasks, user: dict = Depends(
 @router.get('/status')
 def get_sync_status(user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     row = db.execute(text('''
-        SELECT last_sync_status, sync_phase, sync_error, sync_started_at, last_sync_time
+        SELECT last_sync_status, sync_phase, sync_error, sync_started_at, last_sync_time, amoscentral_address
         FROM public.tenants WHERE id=:id
     '''), {'id': user['tenant_id']}).fetchone()
     if not row:
@@ -88,8 +116,15 @@ def get_sync_status(user: dict = Depends(get_current_user), db: Session = Depend
                         ('positions', 'fp_part_of_pn_conf'), ('documents', 'doc_part_of_pn_conf')]:
         counts[kind] = db.execute(text(f'SELECT count(*) FROM "{s}".{table}')).scalar_one()
     from app.matching.catalog import status
+    from app.amos.central import receiver
+    central = receiver.tenant_status(row[5] or '')
+    batches = db.execute(text('''
+        SELECT batch_id, status, ARRAY(SELECT jsonb_object_keys(b.exports))
+        FROM public.amoscentral_batches b WHERE tenant_id=:id ORDER BY created_at DESC LIMIT 10
+    '''), {'id': user['tenant_id']}).fetchall()
+    central['snapshots'] = [{'batch_id': batch[0], 'status': batch[1], 'received': batch[2]} for batch in batches]
     return dict(status=row[0], phase=row[1], error=row[2], started_at=row[3],
-                last_success_at=row[4], counts=counts, index=status(s))
+                last_success_at=row[4], counts=counts, index=status(s), central=central)
 
 
 @router.get('/cache')
@@ -141,6 +176,10 @@ def import_csv(parts: UploadFile = File(...), configurations: UploadFile = File(
         if row[0] == 'RUNNING':
             raise HTTPException(409, 'A refresh is running. Wait until it finishes before importing CSV files.')
         counts = AmosDataSyncer({}, user['schema_name'], db).replace_cache(*data, commit=False)
+        db.execute(text("""
+            UPDATE public.amoscentral_batches SET status='EXPIRED', exports='{}'::jsonb
+            WHERE tenant_id=:id AND status='PENDING'
+        """), {'id': user['tenant_id']})
         db.execute(text("""
             UPDATE public.tenants SET amos_source='csv', last_sync_status='SUCCESS',
                 last_sync_time=CURRENT_TIMESTAMP, sync_started_at=CURRENT_TIMESTAMP,

@@ -265,7 +265,7 @@
     <section x-show="token && section === 'amos'" aria-label="AMOS database">
       <div class="flex flex-wrap items-start justify-between gap-4 mb-8">
         <div><h1 class="text-2xl font-bold">AMOS DB</h1><p class="mt-2 text-sm text-slate-400">Manage the data used to match your Spec2500 records.</p></div>
-        <button x-show="amosForm.source !== 'csv'" @click="triggerSync()" :disabled="sync.status === 'RUNNING'" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-sm font-semibold rounded-lg"><span x-text="sync.status === 'RUNNING' ? 'Sync running…' : 'Sync Now'"></span></button>
+        <button x-show="amosForm.source === 'database'" @click="triggerSync()" :disabled="sync.status === 'RUNNING'" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-sm font-semibold rounded-lg"><span x-text="sync.status === 'RUNNING' ? 'Sync running…' : 'Sync Now'"></span></button>
       </div>
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
         <template x-for="[key, label] in [['parts', 'Part numbers'], ['relationships', 'Part relationships'], ['positions', 'Functional positions'], ['documents', 'Documents']]" :key="key">
@@ -340,9 +340,9 @@
     </section>
     <section x-show="token && section === 'amos' && amosTab === 'connection'" class="bg-slate-950 border border-slate-800 rounded-2xl max-w-2xl p-6 space-y-5" aria-label="AMOS connection settings">
       <h2 class="text-lg font-semibold">Connection settings</h2>
-      <p class="text-sm text-slate-400">Configure the AMOS source and how often its data is refreshed.</p>
-      <label class="block text-sm">Data source<select x-model="amosForm.source" class="block mt-2 bg-slate-900 border border-slate-800 rounded-lg p-2"><option value="database">Direct database (automatic refresh)</option><option value="csv">CSV uploads (manual refresh)</option></select></label>
-        <div class="space-y-3 text-xs">
+      <p class="text-sm text-slate-400">Choose direct database sync, manual CSV import, or incoming AMOScentral messages.</p>
+      <label class="block text-sm">Data source<select x-model="amosForm.source" class="block mt-2 bg-slate-900 border border-slate-800 rounded-lg p-2"><option value="database">Direct database (automatic refresh)</option><option value="csv">CSV uploads (manual refresh)</option><option value="amoscentral">AMOScentral (receive messages)</option></select></label>
+        <div x-show="amosForm.source === 'database'" class="space-y-3 text-xs">
           <div><label class="text-slate-400">Host</label><input type="text" x-model="amosForm.host" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 mt-1"></div>
           <div><label class="text-slate-400">Port</label><input type="number" x-model="amosForm.port" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 mt-1"></div>
           <div><label class="text-slate-400">Database Name</label><input type="text" x-model="amosForm.dbname" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 mt-1"></div>
@@ -350,6 +350,15 @@
           <div><label class="text-slate-400">Password (leave blank to keep saved password)</label><input type="password" x-model="amosForm.password" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 mt-1"></div>
           <div><label class="text-slate-400">Refresh interval (hours)</label><input type="number" min="1" x-model.number="amosForm.refresh_interval_hours" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 mt-1"></div>
         </div>
+      <div x-show="amosForm.source === 'amoscentral'" class="space-y-3 text-sm">
+        <p>Parts, configurations, and documents arrive as separate messages. The cache updates when a complete snapshot is received.</p>
+        <label class="block">Tenant AMOScentral sender address<input type="text" x-model="amosForm.amoscentral_address" :disabled="!matchingSettings.is_admin" placeholder="com.swiss-as.amos.customer.prod" class="block w-full mt-2 bg-slate-900 border border-slate-800 rounded-lg p-2 font-mono"></label>
+        <p>Receiver: <span x-text="sync.central?.state || 'DISABLED'"></span></p>
+        <template x-for="snapshot in (sync.central?.snapshots || [])" :key="snapshot.batch_id">
+          <p class="text-xs text-slate-400"><span class="font-mono" x-text="snapshot.batch_id"></span>: <span x-text="snapshot.status"></span><span x-show="snapshot.status === 'PENDING'" x-text="' — received ' + snapshot.received.join(', ')"></span></p>
+        </template>
+        <p class="text-slate-400">Tenant administrators assign the sender address. The operator manages the application’s AMOScentral credentials. No database connection is needed for this method.</p>
+      </div>
       <div class="pt-4 border-t border-slate-800">
         <button @click="saveAmosConfig()" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-sm font-semibold rounded-lg">Save Configuration</button>
       </div>

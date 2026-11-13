@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Swiss AviationSoftware Ltd. -->
+<!-- P.O.Box, CH-4002 Basel, Switzerland -->
+<!-- http://www.swiss-as.com -->
+<!-- SWISS AviationSoftware, 2012 -->
+<!-- ***AMOS_AUTO_GENERATION*** -->
+<!-- ***AMOS_CHANGELOG_START***
+Default Data Source Schema
+
+Version 1.0 - AMOS 23.12
+08/06/2023 - XRJA - Initial Version
+***AMOS_CHANGELOG_END*** -->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+    <!-- === root === data source table === -->
+    <xs:element name="exportDataSource">
+        <xs:annotation>
+            <xs:documentation>data source table</xs:documentation>
+        </xs:annotation>
+        <xs:complexType>
+            <xs:sequence>
+                <xs:element maxOccurs="1" name="dataSource" type="dataSourceType">
+                    <xs:annotation>
+                        <xs:documentation>data source</xs:documentation>
+                    </xs:annotation>
+                </xs:element>
+            </xs:sequence>
+            <xs:attribute fixed="1.0" name="version" use="required">
+                <xs:annotation>
+                    <xs:documentation>schema version</xs:documentation>
+                </xs:annotation>
+            </xs:attribute>
+        </xs:complexType>
+    </xs:element>
+    <!-- data source row -->
+    <xs:complexType name="rowType">
+        <xs:sequence>
+            <xs:element maxOccurs="unbounded" minOccurs="0" name="value" type="xs:string">
+                <xs:annotation>
+                    <xs:documentation>data source value</xs:documentation>
+                    <xs:appinfo>AMOS_NO_DB</xs:appinfo>
+                </xs:annotation>
+            </xs:element>
+        </xs:sequence>
+        <!-- sequence of cells -->
+    </xs:complexType>
+    <xs:complexType name="headerType">
+        <xs:sequence>
+            <xs:element maxOccurs="unbounded" minOccurs="0" name="cellDefinition" type="cellDefinitionType">
+                <xs:annotation>
+                    <xs:documentation>header cell definition</xs:documentation>
+                </xs:annotation>
+            </xs:element>
+        </xs:sequence>
+    </xs:complexType>
+    <xs:complexType name="cellDefinitionType">
+        <xs:sequence>
+            <xs:element name="name" type="xs:string">
+                <xs:annotation>
+                    <xs:documentation>header name</xs:documentation>
+                    <xs:appinfo>AMOS_NO_DB_EXPORT</xs:appinfo>
+                </xs:annotation>
+            </xs:element>
+            <xs:element name="description" type="xs:string">
+                <xs:annotation>
+                    <xs:documentation>header description</xs:documentation>
+                    <xs:appinfo>AMOS_NO_DB</xs:appinfo>
+                </xs:annotation>
+            </xs:element>
+            <xs:element name="amosType" type="xs:string">
+                <xs:annotation>
+                    <xs:documentation>amos mime type</xs:documentation>
+                    <xs:appinfo>AMOS_NO_DB</xs:appinfo>
+                </xs:annotation>
+            </xs:element>
+        </xs:sequence>
+    </xs:complexType>
+    <xs:complexType name="dataSourceType">
+        <xs:sequence>
+            <xs:element name="dataSourceId" type="xs:string">
+                <xs:annotation>
+                    <xs:documentation>data source id</xs:documentation>
+                    <xs:appinfo>AMOS_DATABASE_EXPORT=xml_data_source.datasource_id</xs:appinfo>
+                    <xs:appinfo>AMOS_MIMETYPE=D_TEXT</xs:appinfo>
+                </xs:annotation>
+            </xs:element>
+            <xs:element name="header" type="headerType">
+                <xs:annotation>
+                    <xs:documentation>data source header</xs:documentation>
+                </xs:annotation>
+            </xs:element>
+            <xs:element maxOccurs="unbounded" minOccurs="0" name="row" type="rowType">
+                <xs:annotation>
+                    <xs:documentation>data source row</xs:documentation>
+                </xs:annotation>
+            </xs:element>
+        </xs:sequence>
+    </xs:complexType>
+</xs:schema>

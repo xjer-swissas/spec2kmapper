@@ -17,30 +17,34 @@ def parse_export(stream, kind):
         raise ValueError(f'{kind}: export the CSV as UTF-8') from None
     if '\x00' in content:
         raise ValueError(f'{kind}: CSV contains a null character')
-    columns = EXPORTS[kind]['columns']
     reader = csv.reader(io.StringIO(content, newline=''), strict=True)
-    rows = []
     try:
-        header = next(reader, [])
-        header = [cell.strip().lower() for cell in header]
-        if len(header) != len(columns) or set(header) != set(columns):
-            raise ValueError(f'{kind}: expected CSV headers: {", ".join(columns)}')
-        for values in reader:
-            if not values:
-                continue
-            if len(values) != len(header):
-                raise ValueError(f'{kind}: line {reader.line_num} has the wrong number of columns')
-            row = dict(zip(header, (value.strip() for value in values)))
-            required = {'parts': ['part_number'], 'configurations': ['parent_pn', 'child_pn'], 'documents': ['pn', 'docno']}[kind]
-            for key in required:
-                if not row[key]:
-                    raise ValueError(f'{kind}: line {reader.line_num} requires {key}')
-            for key, value in row.items():
-                if 'description' not in key and len(value) > 255:
-                    raise ValueError(f'{kind}: line {reader.line_num}, {key} exceeds 255 characters')
-            rows.append(row)
+        return validate_table(next(reader, []), reader, kind)
     except csv.Error as exc:
         raise ValueError(f'{kind}: invalid CSV near line {reader.line_num}: {exc}') from None
+
+
+def validate_table(header, values, kind):
+    """Shared validation for CSV imports and AMOScentral XML tables."""
+    columns = EXPORTS[kind]['columns']
+    header = [cell.strip().lower() for cell in header]
+    if len(header) != len(columns) or set(header) != set(columns):
+        raise ValueError(f'{kind}: expected headers: {", ".join(columns)}')
+    rows = []
+    for number, cells in enumerate(values, 2):
+        if not cells:
+            continue
+        if len(cells) != len(header):
+            raise ValueError(f'{kind}: row {number} has the wrong number of columns')
+        row = dict(zip(header, (value.strip() for value in cells)))
+        required = {'parts': ['part_number'], 'configurations': ['parent_pn', 'child_pn'], 'documents': ['pn', 'docno']}[kind]
+        for key in required:
+            if not row[key]:
+                raise ValueError(f'{kind}: row {number} requires {key}')
+        for key, value in row.items():
+            if '\x00' in value or ('description' not in key and len(value) > 255):
+                raise ValueError(f'{kind}: row {number} has an invalid {key}')
+        rows.append(row)
     if kind == 'parts' and not rows:
         raise ValueError('parts: at least one part is required')
     return rows

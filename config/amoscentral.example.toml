@@ -1,0 +1,39 @@
+# Copy OUTSIDE the repository, e.g. /etc/spec2kmapper/amoscentral.toml; chmod 600.
+# This example contains no working credentials. Never mount keys from the image.
+[amoscentral]
+base_url = "https://central.amos-cloud.com"
+api_version = "v3"
+address = "com.example.spec2kmapper"
+password = "REPLACE_WITH_ADDRESS_PASSWORD"
+client_id = "REPLACE_WITH_OAUTH_CLIENT_ID"
+client_secret = "REPLACE_WITH_OAUTH_CLIENT_SECRET"
+state_dir = "/var/lib/amoscentral"
+private_key_file = "private-key.pem"
+# Include old local keys after a deliberate key rotation to read queued messages.
+historical_private_key_files = []
+system = "spec2kmapper"
+system_version = "2.0.0"
+system_productive = false
+read_timeout = 35
+connect_timeout = 5
+max_body_bytes = 26214400
+
+[routing]
+service = "com.example.spec2kmapper.export"
+service_version = "1.0.0"
+# Set product when the AMOShub integration provides amc_product.
+product = ""
+batch_header = "amc_correlation_id"
+# Prefer a shared snapshot timestamp when AMOS can provide one.
+# With amc_send_time, send the snapshots sequentially (do not interleave batches).
+snapshot_header = "amc_send_time"
+require_encryption = true
+pending_batch_limit = 10
+pending_batch_hours = 168
+
+[routing.data_source_ids]
+parts = "parts"
+configurations = "configurations"
+documents = "documents"
+
+# Tenant administrators assign each tenant's sender address in Connection settings.

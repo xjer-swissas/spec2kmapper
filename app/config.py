@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440 # 24 hours
     UPLOAD_DIR: str = "uploads"
+    AMOSCENTRAL_CONFIG_FILE: str = ""
     SEMANTIC_MATCHING: bool = True
     SEMANTIC_MODEL: str = "BAAI/bge-small-en-v1.5"
     SEMANTIC_CACHE_DIR: str = "/tmp/spec2500-models"

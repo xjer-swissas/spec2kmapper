@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.database import init_master_tables
 from app.amos.scheduler import start_scheduler
+from app.amos.central import receiver
 from app.matching.catalog import start_indexes
 from app.routers import auth_routes, amos_routes, spec2500_routes, matching_routes
 import os
@@ -14,7 +15,14 @@ async def lifespan(app: FastAPI):
     start_scheduler()
     os.makedirs("uploads", exist_ok=True)
     start_indexes()
-    yield
+    receiver.start()
+    try:
+        yield
+    finally:
+        receiver.stop()
+        from app.amos.scheduler import scheduler
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
 
 app = FastAPI(title="AMOS Spec2500 Transformer Suite", version="2.0.0", lifespan=lifespan)
 

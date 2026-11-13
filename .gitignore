@@ -21,3 +21,14 @@ experiments/
 .pytest_cache/
 .coverage
 htmlcov/
+secrets/
+amoscentral-state/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.egg-info/
+build/
+dist/
+config/amoscentral.toml

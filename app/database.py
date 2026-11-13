@@ -61,6 +61,32 @@ def init_master_tables():
             ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS collect_confirmed_mappings BOOLEAN NOT NULL DEFAULT FALSE;
             ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS tuning_enabled BOOLEAN NOT NULL DEFAULT FALSE;
             ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS pn_weight FLOAT NOT NULL DEFAULT 0.25;
+            ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS amoscentral_last_snapshot_at TIMESTAMPTZ;
+            ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS amoscentral_address VARCHAR(64);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_amoscentral_address
+                ON public.tenants(amoscentral_address) WHERE amoscentral_address IS NOT NULL;
+            CREATE TABLE IF NOT EXISTS public.amoscentral_batches (
+                tenant_id INT NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+                batch_id TEXT NOT NULL,
+                sender TEXT NOT NULL,
+                snapshot_at TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                exports JSONB NOT NULL DEFAULT '{}',
+                digests JSONB NOT NULL DEFAULT '{}',
+                PRIMARY KEY (tenant_id, sender, batch_id)
+            );
+            CREATE TABLE IF NOT EXISTS public.amoscentral_receipts (
+                message_id TEXT PRIMARY KEY,
+                tenant_id INT REFERENCES public.tenants(id) ON DELETE CASCADE,
+                sender TEXT NOT NULL,
+                digest TEXT NOT NULL,
+                status TEXT NOT NULL,
+                reason TEXT,
+                received_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_amoscentral_pending
+                ON public.amoscentral_batches(tenant_id, created_at) WHERE status = 'PENDING';
             CREATE TABLE IF NOT EXISTS public.confirmed_mappings (
                 tenant_id INT NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
                 root_pn TEXT NOT NULL, source_pn TEXT NOT NULL, source_description TEXT NOT NULL,

@@ -7,6 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 COPY requirements.txt .
+COPY libs/amoscentral /app/libs/amoscentral
 # Use prebuilt wheels, including bundled PostgreSQL and XML libraries.
 # No compiler toolchain or Debian development packages are required.
 RUN pip install --no-cache-dir --only-binary=:all: -r requirements.txt

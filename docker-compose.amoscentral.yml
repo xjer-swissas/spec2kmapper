@@ -1,0 +1,17 @@
+# Opt in with:
+# docker compose -f docker-compose.yml -f docker-compose.amoscentral.yml up -d --build
+services:
+  backend:
+    environment:
+      AMOSCENTRAL_CONFIG_FILE: /run/secrets/amoscentral.toml
+    secrets:
+      - source: amoscentral_config
+        target: amoscentral.toml
+    volumes:
+      - type: bind
+        source: ${AMOSCENTRAL_STATE_DIR:?Set AMOSCENTRAL_STATE_DIR to an external absolute directory}
+        target: /var/lib/amoscentral
+
+secrets:
+  amoscentral_config:
+    file: ${AMOSCENTRAL_CONFIG_FILE:?Set AMOSCENTRAL_CONFIG_FILE to an external TOML file}

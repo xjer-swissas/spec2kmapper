@@ -1,5 +1,122 @@
 # Spec2500 preprocessing
 
+## AMOScentral message delivery
+
+Three data sources are available under **AMOS DB → Connection settings**:
+direct database, CSV uploads, and AMOScentral. Tenant administrators can assign
+their tenant's AMOScentral **sender address** in that screen. Address assignments
+are unique across tenants. Incoming messages are routed by AMOScentral's
+`amc_sender`, never by a tenant ID inside an XML payload. Only administrators can
+change connection settings. The receiving application's own address and secrets
+are deployment configuration and are never returned by the tenant API.
+
+The reusable Python package is in [`libs/amoscentral`](libs/amoscentral/README.md).
+The application uses its V3 client. Legacy certificate-based messaging remains
+available in the package; SQL and CSV behavior remain available in the app.
+
+### External deployment configuration
+
+1. Copy `config/amoscentral.example.toml` to an **external** location such as
+   `/etc/spec2kmapper/amoscentral.toml`. Fill in the application's address,
+   address password, OAuth client ID/secret, service, and export IDs. Protect this
+   file with mode 0600. Do not put real credentials into the example.
+2. Create an external state directory such as `/var/lib/spec2kmapper/amoscentral`.
+   Back it up with the application database; it holds the private key and stable
+   system ID. AMOScentral's private key is required to decrypt queued messages
+   after redeployment. Neither this directory nor the real TOML file belongs in
+   Git or a Docker build context.
+3. Export the two host paths and initialize the key once:
+
+   ```sh
+   export AMOSCENTRAL_CONFIG_FILE=/etc/spec2kmapper/amoscentral.toml
+   export AMOSCENTRAL_STATE_DIR=/var/lib/spec2kmapper/amoscentral
+   docker compose -f docker-compose.yml -f docker-compose.amoscentral.yml build backend
+   docker compose -f docker-compose.yml -f docker-compose.amoscentral.yml run --rm --no-deps backend \
+     amoscentral init-key --config /run/secrets/amoscentral.toml
+   docker compose -f docker-compose.yml -f docker-compose.amoscentral.yml up -d
+   ```
+
+The overlay mounts the credential file read-only as a Compose secret and mounts
+the external state directory at `/var/lib/amoscentral`. Host paths can change
+without rebuilding the image. Startup verifies an existing remote key or uploads
+the public key if none is registered, then connects the address. It never silently
+replaces an existing active key. Keep one backend worker as in the base deployment.
+An application database advisory lock prevents two receivers from owning the inbox
+at once. Startup migrations add the address, staging, and receipt tables.
+
+Without `AMOSCENTRAL_CONFIG_FILE`, the receiver is disabled and SQL/CSV still work.
+An invalid file or missing identity leaves SQL/CSV usable and the receiver status
+reports a configuration error or retries; no secret values are shown in the UI.
+Restart the backend after changing the external file or restoring a missing key.
+
+### Proposed AMOS export contract
+
+The sender-side export names have not yet been defined. These are configurable
+defaults, not an assertion that the AMOS export jobs already exist:
+
+| `dataSourceId` | Columns, matching the existing SQL aliases |
+| --- | --- |
+| `parts` | `part_number`, `description` |
+| `configurations` | `parent_pn`, `fp_code`, `fp_description`, `child_pn` |
+| `documents` | `pn`, `docno` |
+
+Each message contains one XML document conforming to
+`app/amos/schemas/exportDataSource_1.0.xsd`. The XML root is
+`<exportDataSource version="1.0">`. Header `cellDefinition/name` values identify
+columns, and `row/value` cells follow their header order. Identifiers remain text.
+Empty configurations/documents have a header and zero rows; the parts master
+must contain at least one part. Each decoded export is limited to 25 MB.
+
+All three messages for one refresh must share a **new** `amc_correlation_id`.
+Configure the same `amc_service` and `amc_service_version` in AMOS and the external
+file, enable end-to-end encryption, and request `amc_requested_ack: technical`.
+The broker sets `amc_sender`; the recipient is the application's configured
+address. Configure `routing.product` as well if the integration uses `amc_product`.
+`routing.data_source_ids` and `routing.batch_header` can override the defaults.
+
+For ordering, prefer a shared UTC snapshot timestamp in a configured
+`routing.snapshot_header` such as `amc_snapshot_time`. All messages in a refresh
+should then carry that same value. The default `amc_send_time` uses the earliest
+component's send time: AMOS must generate snapshots sequentially without
+interleaving batches. The client cannot infer a coherent batch or data version
+from unrelated messages, and older completed snapshots cannot overwrite newer ones.
+
+Each component is validated and committed to PostgreSQL before technical ACK.
+When all three arrive, the cache, successful-sync status, snapshot version and
+receipt commit in one transaction. Only then is the search index refreshed.
+Incomplete snapshots survive restarts and leave the previous cache available.
+Duplicates are idempotent; conflicting components are rejected. Completed
+snapshots retain replay guards but release staged row data. Pending batches
+expire after seven days by default, with ten pending batches allowed per tenant.
+Saving connection settings or importing CSV cancels that tenant's incomplete batches.
+
+Unknown senders, unexpected services, missing batch headers, and invalid exports
+get a durable `REJECTED` receipt and are then acknowledged so they cannot block
+the queue. Rejection records contain metadata and an error category, not the XML
+body. Failed database writes, key retrieval, or decryption leave messages
+unacknowledged for retry. An envelope too malformed to identify safely also remains
+unacknowledged and needs operator intervention. The connection screen shows the
+receiver state and recent snapshot/component status. Operators can inspect
+`public.amoscentral_receipts` for rejected deliveries. Sender address assignment
+is an administrator trust decision; assigning an address does not prove ownership.
+
+### Validation
+
+Run the regular suite after installing requirements:
+
+```sh
+python -m unittest discover -s tests -v
+```
+
+Real broker-staging integration tests additionally require
+`AMOSCENTRAL_TEST_DATABASE_URL`, pointing to a **disposable** PostgreSQL database
+whose name starts with `spec2kmapper_amc_test`. They initialize tables and truncate
+test tenants; never use the deployed application's database. The checked-in Java
+fixture tests require no Java runtime. The separate browser smoke test includes
+admin address entry and switching back to SQL. Live AMOScentral connectivity must
+still be verified using real externally configured credentials and the final
+AMOS export job definitions; no live broker has been contacted in these tests.
+
 The wizard compares uploaded records with the tenant's cached AMOS configuration.
 Exact part numbers are preselected. Normalized identifiers, fuzzy matches, and
 matches supported by descriptions are suggestions requiring a user selection.

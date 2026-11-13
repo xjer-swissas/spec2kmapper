@@ -3,12 +3,15 @@ Uses mocked API responses to exercise the actual Alpine UI without customer data
 """
 import base64
 import json
+import os
+import sys
 from pathlib import Path
 import time
 import requests
 from playwright.sync_api import sync_playwright, expect
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 ASSETS = Path('/tmp/spec2500-browser-assets')
 ASSETS.mkdir(exist_ok=True)
 for name, url in [('alpine.js', 'https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js'),
@@ -22,7 +25,7 @@ payload = base64.urlsafe_b64encode(json.dumps({'exp': int(time.time()) + 3600}).
 token = 'header.' + payload + '.signature'
 root_match = dict(candidate='ENGINE-1', score=100, match_type='EXACT', description='Engine')
 child_match = dict(candidate='CHILD-1', score=70, match_type='SEMANTIC_DESCRIPTION', description='Oil pump')
-state = {'expired': False, 'sync': 'SUCCESS', 'candidate_calls': 0}
+state = {'expired': False, 'sync': 'SUCCESS', 'candidate_calls': 0, 'source': 'database', 'amoscentral_address': ''}
 
 
 def route_request(route):
@@ -46,7 +49,10 @@ def route_request(route):
         data = dict(status=state['sync'], phase='Loading documents' if state['sync'] == 'RUNNING' else 'Complete',
                     counts=dict(parts=100, relationships=20, positions=10, documents=5), last_success_at='2026-09-07T10:00:00')
     elif path == '/api/amos/config':
-        data = dict(host='amos', port=5432, dbname='amos', user='user', password='', refresh_interval_hours=24)
+        if route.request.method == 'POST':
+            state.update({k: route.request.post_data_json[k] for k in ['source', 'amoscentral_address']})
+        data = dict(host='amos', port=5432, dbname='amos', user='user', password='', refresh_interval_hours=24,
+                    source=state['source'], amoscentral_address=state['amoscentral_address'])
     elif path == '/api/amos/csv/queries':
         from app.amos.queries import EXPORTS
         data = EXPORTS
@@ -76,7 +82,8 @@ def route_request(route):
 
 
 with sync_playwright() as p:
-    browser = p.chromium.launch(headless=True, args=['--no-sandbox'])
+    browser = p.chromium.launch(headless=True, args=['--no-sandbox'],
+                                executable_path=os.environ.get('PLAYWRIGHT_CHROMIUM_EXECUTABLE'))
     page = browser.new_page(viewport={'width': 1440, 'height': 1000})
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
@@ -110,6 +117,15 @@ with sync_playwright() as p:
     expect(page.get_by_label('Description reranker')).to_have_value('cross_encoder')
     page.get_by_role('button', name='Connection settings', exact=True).click()
     expect(page.get_by_role('button', name='Save Configuration')).to_be_visible()
+    page.get_by_label('Data source').select_option('amoscentral')
+    page.get_by_label('Tenant AMOScentral sender address').fill('com.swiss-as.amos.customer.prod')
+    expect(page.locator('input[x-model="amosForm.host"]')).not_to_be_visible()
+    expect(page.get_by_role('button', name='Sync Now')).not_to_be_visible()
+    page.get_by_role('button', name='Save Configuration').click()
+    expect(page.get_by_text('AMOS settings saved.', exact=True)).to_be_visible()
+    assert state['amoscentral_address'] == 'com.swiss-as.amos.customer.prod'
+    page.get_by_label('Data source').select_option('database')
+    page.get_by_role('button', name='Save Configuration').click()
     page.get_by_role('button', name='Spec2500 processing', exact=True).click()
     page.locator('#specFileInput').set_input_files({'name': 'test.xml', 'mimeType': 'application/xml', 'buffer': b'<Crate/>'})
     page.get_by_role('button', name='Choose from all AMOS parts…').click()
@@ -169,4 +185,4 @@ with sync_playwright() as p:
     page.screenshot(path='/tmp/spec2500-amos-section.png', full_page=True)
     assert not errors, errors
     browser.close()
-print('Browser smoke passed: upload, root filtering, manual picker, back, session recovery, sync progress, cache, start over.')
+print('Browser smoke passed: AMOScentral admin address assignment, source switching, upload, matching, session recovery, sync progress, and cache.')
