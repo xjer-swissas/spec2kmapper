@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AMOS Spec2500 Pre-Processor & Mapping Hub</title>
+  <style>[x-cloak] { display: none !important; } button:disabled { opacity: .45; cursor: not-allowed; }</style>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen" x-data="app()" x-cloak>
+
+  <!-- Navbar -->
+  <header class="border-b border-slate-800 bg-slate-950/70 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <i class="fa-solid fa-plane-engines text-blue-500 text-2xl"></i>
+        <span class="font-bold text-xl tracking-tight bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">AMOS Spec2500 Suite</span>
+      </div>
+      <div class="flex items-center space-x-4" x-show="token">
+        <span class="hidden sm:inline text-sm text-slate-400"><i class="fa-solid fa-building mr-1"></i> <span x-text="tenantSchema"></span></span>
+        <button aria-label="Sign out" @click="logout()" class="text-slate-400 hover:text-red-400 text-sm">
+          <i class="fa-solid fa-right-from-bracket"></i>
+        </button>
+      </div>
+    </div>
+    <nav x-show="token" aria-label="Main sections" class="max-w-7xl mx-auto px-6 flex gap-8 text-sm font-semibold">
+      <button @click="section = 'wizard'; showCache = false" :aria-current="section === 'wizard' ? 'page' : null" :class="section === 'wizard' ? 'border-blue-400 text-blue-400' : 'border-transparent text-slate-400 hover:text-white'" class="py-4 border-b-2">Spec2500 processing</button>
+      <button @click="openAmos()" :aria-current="section === 'amos' ? 'page' : null" :class="section === 'amos' ? 'border-blue-400 text-blue-400' : 'border-transparent text-slate-400 hover:text-white'" class="py-4 border-b-2">AMOS DB</button>
+    </nav>
+  </header>
+
+  <!-- Main Content Area -->
+  <main class="max-w-7xl mx-auto px-6 py-8">
+    <p x-show="error" x-text="error" role="alert" class="mb-4 p-3 bg-red-950 text-red-300 rounded-lg"></p>
+    <p x-show="notice" x-text="notice" role="status" class="mb-4 text-emerald-400"></p>
+    <p x-show="busy" role="status" class="mb-4 text-blue-300">Processing… Description matching may take longer on the first request while the local model loads.</p>
+
+    <!-- Auth View -->
+    <div x-show="!token" class="max-w-md mx-auto mt-12 bg-slate-950 p-8 rounded-2xl border border-slate-800 shadow-2xl">
+      <h2 class="text-2xl font-bold text-center mb-6" x-text="authMode === 'login' ? 'Customer Sign In' : 'Register Customer Account'"></h2>
+      <p x-show="authMessage" x-text="authMessage" class="mb-4 text-sm text-amber-300"></p>
+
+      <div class="space-y-4">
+        <div x-show="authMode === 'register'">
+          <label class="text-xs font-semibold text-slate-400">Company Name</label>
+          <input type="text" x-model="authForm.company_name" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm mt-1 focus:border-blue-500 outline-none">
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-slate-400">Username</label>
+          <input type="text" x-model="authForm.username" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm mt-1 focus:border-blue-500 outline-none">
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-slate-400">Password</label>
+          <input type="password" x-model="authForm.password" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm mt-1 focus:border-blue-500 outline-none">
+        </div>
+        <button @click="handleAuth()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-2.5 rounded-lg text-sm transition mt-2">
+          <span x-text="authMode === 'login' ? 'Sign In' : 'Create Customer Tenant'"></span>
+        </button>
+      </div>
+
+      <div class="mt-6 text-center text-xs text-slate-400">
+        <span x-text="authMode === 'login' ? 'New Customer?' : 'Already have an account?'"></span>
+        <button @click="authMode = authMode === 'login' ? 'register' : 'login'" class="text-blue-400 font-semibold ml-1 underline">
+          <span x-text="authMode === 'login' ? 'Register here' : 'Sign in'"></span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Wizard Steps View -->
+    <div x-show="token && section === 'wizard'">
+      <div class="mb-8 flex flex-wrap items-center justify-between gap-4">
+        <div><h1 class="text-2xl font-bold">Spec2500 processing</h1><p class="mt-2 text-sm text-slate-400">Align a transfer record with your AMOS data.</p></div>
+      </div>
+      <div x-show="uploadResult.session_id" class="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-800 bg-slate-950 px-5 py-3">
+        <div class="text-sm"><span class="text-slate-500 mr-2">Current file</span><span class="font-medium" x-text="fileName"></span></div>
+        <div class="flex gap-3">
+          <button x-show="step > 1" @click="step--" :disabled="busy" class="px-3 py-2 rounded-lg border border-slate-700 text-sm hover:bg-slate-800">Back</button>
+          <button @click="startOver()" :disabled="busy" class="px-3 py-2 rounded-lg border border-slate-700 text-sm text-slate-400 hover:text-white hover:bg-slate-800">Start over</button>
+        </div>
+      </div>
+
+      <!-- Step Navigation Indicators -->
+      <div class="flex items-center justify-between mb-8 max-w-4xl mx-auto">
+        <template x-for="(stepName, index) in ['1. Upload Spec2500', '2. Root PN Mapping', '3. Sub-PNs & Exclusions', '4. Positions & Documents', '5. Export']">
+          <button @click="step = index + 1" :disabled="busy || index + 1 > step" class="flex items-center space-x-2" :class="step >= index + 1 ? 'text-blue-400 font-semibold' : 'text-slate-600'">
+            <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs border"
+                 :class="step >= index + 1 ? 'border-blue-400 bg-blue-950/50' : 'border-slate-800 bg-slate-950'"
+                 x-text="index + 1"></div>
+            <span class="text-xs hidden md:inline" x-text="stepName"></span>
+          </button>
+        </template>
+      </div>
+
+      <!-- Step 1: Upload File -->
+      <div x-show="step === 1" class="max-w-2xl mx-auto bg-slate-950 p-10 rounded-2xl border border-slate-800 text-center">
+        <i class="fa-solid fa-file-code text-5xl text-blue-500 mb-4"></i>
+        <h3 class="text-xl font-bold mb-2">Upload Spec2500 XML File</h3>
+        <p class="text-sm text-slate-400 mb-6">Import your engine or aircraft transfer record XML file to begin automated parsing and mapping.</p>
+
+        <input type="file" id="specFileInput" @change="uploadFile($event)" :disabled="busy" class="hidden" accept=".xml">
+        <label for="specFileInput" class="cursor-pointer inline-flex items-center px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl text-sm transition">
+          <i class="fa-solid fa-cloud-arrow-up mr-2"></i> Choose Spec2500 XML
+        </label>
+      </div>
+
+      <!-- Step 2: Root PN Match -->
+      <div x-show="step === 2" class="max-w-2xl mx-auto bg-slate-950 p-8 rounded-2xl border border-slate-800">
+        <h3 class="text-xl font-bold mb-1">Step 2: Confirm Root Engine / Asset Part Number</h3>
+        <p class="text-xs text-slate-400 mb-6">We identified the following root part number in the uploaded Spec2500 crate.</p>
+
+        <div class="bg-slate-900 p-4 rounded-xl border border-slate-800 mb-6 flex items-center justify-between">
+          <div>
+            <div class="text-xs text-slate-500">Detected in Spec2500</div>
+            <div class="text-lg font-mono font-bold text-blue-400" x-text="uploadResult.detected_root_pn"></div>
+            <div class="text-sm text-slate-400" x-text="uploadResult.root_description"></div>
+          </div>
+          <span class="px-3 py-1 rounded-full text-xs font-semibold bg-blue-950 text-blue-400 border border-blue-800">Root Assembly</span>
+        </div>
+
+        <p x-show="uploadResult.matching_warning" x-text="uploadResult.matching_warning" role="status" class="text-sm text-amber-300"></p>
+        <label class="text-xs font-semibold text-slate-400 mb-2 block">Ranked AMOS suggestions (scores measure similarity):</label>
+        <select x-model="selectedRootPn" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:border-blue-500 outline-none font-mono">
+          <template x-for="m in uploadResult.root_matches" :key="m.candidate">
+            <option :value="m.candidate" x-text="matchLabel(m)"></option>
+          </template>
+        </select>
+        <button @click="openCache('__ROOT__')" class="mt-3 text-sm text-blue-400">Choose from all AMOS parts…</button>
+        <p class="mt-2 text-xs text-slate-400">Root suggestions prioritize configured assemblies and matching identifiers. The picker searches the full master catalogue.</p>
+        <p x-show="confirmedRootPn && confirmedRootPn !== selectedRootPn" class="mt-3 text-sm text-amber-300">Confirming a different root will regenerate suggestions and reset the mappings below it.</p>
+
+        <div class="mt-8 flex justify-end">
+          <button @click="confirmRootPn()" :disabled="busy || !selectedRootPn" class="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl text-sm">
+            Confirm & Proceed to Sub-Assemblies <i class="fa-solid fa-arrow-right ml-1"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Step 3: Sub-PNs & Exclusion Cascade -->
+      <div x-show="step === 3" class="bg-slate-950 p-8 rounded-2xl border border-slate-800">
+        <div class="flex items-center justify-between mb-6">
+          <div>
+            <h3 class="text-xl font-bold">Step 3: Sub-Assembly Part Numbers Mapping & Exclusions</h3>
+            <p class="text-xs text-slate-400">Map discovered part numbers to your AMOS tree. Mark 'Exclude' to prune a component and all its subparts.</p>
+          </div>
+          <button @click="step = 4" class="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl text-sm">
+            Next: Positions & Documents <i class="fa-solid fa-arrow-right ml-1"></i>
+          </button>
+        </div>
+
+        <p x-show="candidates.configuration_warning" x-text="candidates.configuration_warning"
+           role="alert" class="mb-4 text-sm text-amber-400"></p>
+        <p x-show="candidates.matching_warning" x-text="candidates.matching_warning" role="status" class="mb-4 text-sm text-amber-400"></p>
+        <p class="mb-4 text-xs text-slate-400">Only exact part numbers are preselected. Description and normalized-number suggestions need review. Similar descriptions do not establish part interchangeability.</p>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-sm border-collapse">
+            <thead>
+              <tr class="border-b border-slate-800 text-xs text-slate-400 uppercase">
+                <th class="py-3 px-4">Spec2500 Part Number</th>
+                <th class="py-3 px-4">Match Status</th>
+                <th class="py-3 px-4">Mapped AMOS Part Number</th>
+                <th class="py-3 px-4 text-center">Action</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800/60 font-mono text-xs">
+              <template x-for="(matches, origPn) in candidates.pn_matches" :key="origPn">
+                <tr x-data="{ expanded: false }" :class="pnMapping[origPn] === '__EXCLUDE__' ? 'opacity-40 bg-red-950/20' : ''">
+                  <td class="py-3 px-4 font-semibold text-slate-200"><span x-text="origPn"></span><div class="mt-1 text-slate-400" x-text="candidates.pn_descriptions?.[origPn] || 'No description in XML'"></div></td>
+                  <td class="py-3 px-4">
+                    <span class="px-2 py-0.5 rounded text-[11px] font-semibold"
+                          :class="partStatus(origPn) === 'Exact PN' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-amber-950 text-amber-400 border border-amber-800'"
+                          x-text="partStatus(origPn)"></span>
+                  </td>
+                  <td class="py-3 px-4">
+                    <select x-model="pnMapping[origPn]" :disabled="pnMapping[origPn] === '__EXCLUDE__' || origPn === uploadResult.detected_root_pn" class="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-1.5 text-xs outline-none focus:border-blue-500">
+                      <option value="">-- Leave Unresolved --</option>
+                      <template x-for="m in matches.filter((m, index) => expanded || index < 10 || m.candidate === pnMapping[origPn])" :key="m.candidate">
+                        <option :value="m.candidate" x-text="matchLabel(m)"></option>
+                      </template>
+                    </select>
+                    <button x-show="matches.length > 10" @click="expanded = !expanded" class="block mt-2 text-blue-400" x-text="expanded ? 'Show fewer suggestions' : 'Show more suggestions (' + matches.length + ')' "></button>
+                    <div x-show="candidates.collect_confirmed_mappings" class="my-2 space-y-2">
+                      <p class="text-xs text-slate-400">Confirm only after independently verifying this mapping.</p>
+                      <button @click="confirmReviewed(origPn)" :disabled="!pnMapping[origPn] || pnMapping[origPn] === '__EXCLUDE__'" class="text-emerald-400 mr-3">Confirm reviewed mapping</button>
+                      <button @click="confirmReviewed(origPn, true)" class="text-slate-400">Confirm no valid match</button>
+                      <p x-show="reviewedMappings[origPn]" class="text-xs text-emerald-400">Saved review: <span x-text="reviewedMappings[origPn] === '__NO_MATCH__' ? 'No valid match' : reviewedMappings[origPn]"></span></p>
+                    </div>
+                    <button @click="openCache(origPn)" :disabled="pnMapping[origPn] === '__EXCLUDE__'" class="mt-2 text-blue-400">Choose from all AMOS parts…</button>
+                    <p x-show="pnMapping[origPn] && pnMapping[origPn] !== '__EXCLUDE__' && !candidates.available_pns_pool?.includes(pnMapping[origPn])" class="mt-1 text-amber-300">Outside this root's cached configuration.</p>
+                  </td>
+                  <td class="py-3 px-4 text-center">
+                    <button @click="toggleExclude(origPn)" :disabled="origPn === uploadResult.detected_root_pn" class="px-2.5 py-1 rounded text-[11px] font-semibold border"
+                            :class="pnMapping[origPn] === '__EXCLUDE__' ? 'bg-red-600 text-white border-red-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:border-red-600 hover:text-red-400'">
+                      <i class="fa-solid fa-ban mr-1"></i> <span x-text="pnMapping[origPn] === '__EXCLUDE__' ? 'Excluded' : 'Exclude'"></span>
+                    </button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Step 4: Positions & Documents -->
+      <div x-show="step === 4" class="bg-slate-950 p-8 rounded-2xl border border-slate-800 space-y-8">
+        <div class="flex items-center justify-between">
+          <h3 class="text-xl font-bold">Step 4: Functional Positions & Documents Mapping</h3>
+          <button @click="step = 5" class="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl text-sm">
+            Next: Export <i class="fa-solid fa-check ml-1"></i>
+          </button>
+        </div>
+
+        <!-- Functional Positions -->
+        <div>
+          <h4 class="text-sm font-semibold text-blue-400 uppercase tracking-wider mb-3">Functional Positions</h4>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <template x-for="(matches, origFp) in candidates.fp_matches" :key="origFp">
+              <div class="bg-slate-900 p-3 rounded-xl border border-slate-800 flex items-center justify-between space-x-4">
+                <span class="font-mono text-xs font-bold text-slate-300" x-text="origFp"></span>
+                <select x-model="fpMapping[origFp]" class="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-xs font-mono outline-none">
+                  <option value="">-- Same as Original --</option>
+                  <template x-for="m in matches" :key="m.candidate">
+                    <option :value="m.candidate" x-text="`${m.candidate} (${m.score}%)`"></option>
+                  </template>
+                </select>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- Documents -->
+        <div>
+          <h4 class="text-sm font-semibold text-indigo-400 uppercase tracking-wider mb-3">Document Numbers (SB / AD / Task)</h4>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <template x-for="(matches, origDoc) in candidates.doc_matches" :key="origDoc">
+              <div class="bg-slate-900 p-3 rounded-xl border border-slate-800 flex items-center justify-between space-x-4">
+                <span class="font-mono text-xs font-bold text-slate-300 truncate max-w-[200px]" x-text="origDoc"></span>
+                <select x-model="docMapping[origDoc]" class="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-xs font-mono outline-none">
+                  <option value="">-- Same as Original --</option>
+                  <template x-for="m in matches" :key="m.candidate">
+                    <option :value="m.candidate" x-text="`${m.candidate} (${m.score}%)`"></option>
+                  </template>
+                </select>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 5: Export Summary -->
+      <div x-show="step === 5" class="max-w-2xl mx-auto bg-slate-950 p-10 rounded-2xl border border-slate-800 text-center">
+        <i class="fa-solid fa-circle-check text-5xl text-emerald-400 mb-4"></i>
+        <h3 class="text-2xl font-bold mb-2">Spec2500 Transformations Ready</h3>
+        <p class="text-sm text-slate-400 mb-6">Download applies your selected mappings and prunes excluded branches. Unresolved values remain as they appear in the original XML.</p>
+        <p class="mb-4 text-sm text-amber-300"><span x-text="Object.values(pnMapping).filter(value => !value).length"></span> unresolved part numbers will be kept unchanged.</p>
+
+        <button @click="downloadExport()" class="px-8 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-sm shadow-lg shadow-emerald-950 transition">
+          <i class="fa-solid fa-download mr-2"></i> Download Transformed Spec2500 XML
+        </button>
+      </div>
+
+    </div>
+
+    <section x-show="token && section === 'amos'" aria-label="AMOS database">
+      <div class="flex flex-wrap items-start justify-between gap-4 mb-8">
+        <div><h1 class="text-2xl font-bold">AMOS DB</h1><p class="mt-2 text-sm text-slate-400">Manage the data used to match your Spec2500 records.</p></div>
+        <button x-show="amosForm.source !== 'csv'" @click="triggerSync()" :disabled="sync.status === 'RUNNING'" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-sm font-semibold rounded-lg"><span x-text="sync.status === 'RUNNING' ? 'Sync running…' : 'Sync Now'"></span></button>
+      </div>
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
+        <template x-for="[key, label] in [['parts', 'Part numbers'], ['relationships', 'Part relationships'], ['positions', 'Functional positions'], ['documents', 'Documents']]" :key="key">
+          <button @click="amosTab = 'cache'; cacheKind = key; loadCache(true)" class="text-left p-5 bg-slate-950 rounded-xl border border-slate-800 hover:border-slate-600"><span class="block text-sm text-slate-400" x-text="label"></span><span class="block mt-2 text-2xl font-semibold" x-text="formatCount(sync.counts[key])"></span></button>
+        </template>
+      </div>
+      <div class="mb-8 flex flex-wrap justify-between gap-3 text-sm text-slate-400" role="status" aria-live="polite">
+        <span><span class="inline-block w-2 h-2 rounded-full mr-2" :class="sync.status === 'RUNNING' ? 'bg-blue-400 animate-pulse' : (sync.status === 'FAILED' ? 'bg-red-400' : 'bg-slate-500')"></span><span x-text="sync.phase || (sync.status === 'IDLE' ? 'Ready to sync' : sync.status)"></span></span>
+        <span>Last successful sync: <span x-text="formatDate(sync.last_success_at)"></span></span>
+      </div>
+      <div class="mb-5 text-sm text-slate-400">Description search index: <span x-text="sync.index?.status || 'NOT_READY'"></span> · <span x-text="formatCount(sync.index?.completed)"></span> / <span x-text="formatCount(sync.index?.total)"></span> descriptions
+        <button @click="rebuildIndex()" :disabled="['QUEUED', 'BUILDING'].includes(sync.index?.status)" class="ml-3 text-blue-400">Update index</button>
+        <p x-show="sync.index?.error" x-text="sync.index?.error" class="text-amber-300"></p>
+      </div>
+      <p x-show="sync.error" x-text="sync.error" role="alert" class="mb-5 text-red-300"></p>
+      <nav aria-label="AMOS views" class="flex gap-6 border-b border-slate-800 mb-6 text-sm">
+        <button @click="amosTab = 'cache'; loadCache()" :class="amosTab === 'cache' ? 'border-blue-400 text-blue-400' : 'border-transparent text-slate-400'" class="pb-3 border-b-2">Cached data</button>
+        <button @click="amosTab = 'csv'; loadCsvQueries()" :class="amosTab === 'csv' ? 'border-blue-400 text-blue-400' : 'border-transparent text-slate-400'" class="pb-3 border-b-2">SQL / CSV import</button>
+        <button @click="amosTab = 'connection'" :class="amosTab === 'connection' ? 'border-blue-400 text-blue-400' : 'border-transparent text-slate-400'" class="pb-3 border-b-2">Connection settings</button>
+        <button @click="amosTab = 'settings'; loadMatchingSettings()" :class="amosTab === 'settings' ? 'border-blue-400 text-blue-400' : 'border-transparent text-slate-400'" class="pb-3 border-b-2">Settings</button>
+      </nav>
+    </section>
+    <section x-show="token && section === 'amos' && amosTab === 'csv'" class="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-6" aria-label="AMOS CSV import">
+      <h2 class="text-lg font-semibold">Import AMOS data without a database connection</h2>
+      <p class="text-sm text-slate-400">Run each read-only SQL query in your AMOS PostgreSQL system and export its results as a UTF-8, comma-separated CSV with column headers. Keep identifiers as text to preserve leading zeros. Maximum 25 MB per file.</p>
+      <p class="text-sm text-slate-400">Upload all three exports together. For configurations or documents with no results, upload a CSV containing only the headers. A successful import replaces the entire cached catalogue and disables automatic database refreshes. Invalid files leave the previous cache intact.</p>
+      <template x-for="(definition, kind) in csvQueries" :key="kind">
+        <div class="space-y-3 border-t border-slate-800 pt-5">
+          <div class="flex justify-between items-center"><h3 class="font-semibold capitalize" x-text="kind"></h3><button @click="copySql(definition.sql)" class="text-blue-400 text-sm">Copy SQL</button></div>
+          <textarea readonly :aria-label="kind + ' SQL query'" :value="definition.sql" rows="8" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-3 font-mono text-xs"></textarea>
+          <p class="text-xs text-slate-400">CSV headers: <span x-text="definition.columns.join(', ')"></span></p>
+          <label class="block text-sm"><span x-text="'Upload ' + kind + ' CSV'"></span><input type="file" accept=".csv,text/csv" :disabled="csvBusy" @change="csvFiles[kind] = $event.target.files[0]" class="block mt-2 text-slate-300"></label>
+        </div>
+      </template>
+      <button @click="importCsv()" :disabled="csvBusy || sync.status === 'RUNNING' || !csvFiles.parts || !csvFiles.configurations || !csvFiles.documents" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-sm font-semibold rounded-lg" x-text="csvBusy ? 'Importing…' : 'Import CSV files and replace cache'"></button>
+    </section>
+    <section x-show="token && section === 'amos' && amosTab === 'settings'" class="bg-slate-950 border border-slate-800 rounded-2xl max-w-3xl p-6 space-y-6" aria-label="Matching settings">
+      <div><h2 class="text-lg font-semibold">Matching settings</h2><p class="text-sm text-slate-400 mt-2">Settings apply to this customer's catalogue. Existing selections are preserved.</p></div>
+      <p x-show="!settingsLoaded" class="text-slate-400">Loading settings…</p>
+      <p x-show="settingsLoaded && !matchingSettings.is_admin" class="text-amber-300 text-sm">Only an administrator can change these settings.</p>
+      <fieldset :disabled="!settingsLoaded || !matchingSettings.is_admin || settingsBusy" class="space-y-6">
+        <label class="block text-sm">PN ranking mode
+          <select x-model="matchingSettings.ranking_mode" aria-label="PN ranking mode" class="block mt-2 bg-slate-900 border border-slate-700 rounded-lg p-2 w-full"><option value="weighted">Current scoring (default)</option><option value="rrf">Reciprocal Rank Fusion (RRF)</option></select>
+          <span class="block mt-2 text-xs text-slate-400">RRF combines ranking positions from PN, description text, and description meaning. Exact and normalized identifiers retain priority in both modes. Positions and documents are unchanged.</span>
+        </label>
+        <label class="block text-sm">Description reranker
+          <select x-model="matchingSettings.reranker" aria-label="Description reranker" class="block mt-2 bg-slate-900 border border-slate-700 rounded-lg p-2 w-full"><option value="none">None (default)</option><option value="cross_encoder">Cross-encoder</option></select>
+          <span class="block mt-2 text-xs text-slate-400">Optionally reorders shortlisted part suggestions using descriptions. Exact and normalized identifiers retain priority. Missing descriptions keep their initial positions. Adds processing time; the first use downloads a local model. Documents and positions are unchanged.</span>
+        </label>
+        <label class="block text-sm"><input type="checkbox" x-model="matchingSettings.collect_confirmed_mappings" class="mr-2">Collect explicitly confirmed mappings<span class="block mt-2 text-xs text-slate-400">Adds review controls to new subpart analyses. Selecting or exporting a mapping never counts as confirmation. Saved examples remain stored if collection is turned off.</span></label>
+        <label class="block text-sm"><input type="checkbox" x-model="matchingSettings.tuning_enabled" class="mr-2">Enable evaluation and tuning<span class="block mt-2 text-xs text-slate-400">Compare ranking methods using reviewed examples. Evaluation never changes live settings automatically.</span></label>
+        <label x-show="matchingSettings.tuning_enabled" class="block text-sm">Live PN weight for weighted dropdown ranking
+          <input type="number" min="0" max="1" step="0.05" x-model.number="matchingSettings.pn_weight" aria-label="Live PN weight" class="block mt-2 bg-slate-900 rounded-lg p-2">
+          <span class="block mt-2 text-xs text-slate-400">Default 0.25 PN / 0.75 description. The remaining weight goes to description evidence. This weight is ignored in RRF mode; the hybrid picker's original scoring remains unchanged in Current mode.</span>
+        </label>
+        <button @click="saveMatchingSettings()" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-semibold">Save matching settings</button>
+      </fieldset>
+      <div class="border-t border-slate-800 pt-5 space-y-3">
+        <h3 class="font-semibold">Evaluate confirmed mappings</h3><p class="text-sm text-slate-400"><span x-text="matchingSettings.confirmed_count"></span> reviewed examples saved. Evaluation compares initial weighted/RRF rankings on up to 1,000 saved pools; it does not evaluate the optional cross-encoder.</p>
+        <div x-show="matchingSettings.tuning_enabled && matchingSettings.is_admin" class="space-y-3">
+          <label class="block text-sm">Trial PN weight (evaluation only)<input type="number" min="0" max="1" step="0.05" x-model.number="trialWeight" aria-label="Trial PN weight" class="ml-3 bg-slate-900 p-2 rounded-lg w-24"></label>
+          <button @click="evaluateMatching()" :disabled="settingsBusy || !matchingSettings.confirmed_count" class="px-4 py-2 border border-slate-700 rounded-lg text-sm">Compare current approach with RRF</button>
+          <div x-show="evaluation" class="space-y-2 text-sm">
+            <p x-text="evaluation?.note" class="text-amber-300"></p>
+            <p>Evaluated: <span x-text="evaluation?.eligible"></span> · No valid match: <span x-text="evaluation?.no_match"></span> · Target outside saved pool: <span x-text="evaluation?.outside_pool"></span></p>
+            <table class="w-full text-left"><thead><tr><th>Method</th><th>Correct first</th><th>Correct in top 5</th></tr></thead><tbody><template x-for="method in ['weighted', 'rrf']"><tr><td class="py-2" x-text="method"></td><td x-text="evaluation?.results?.[method]?.top1"></td><td x-text="evaluation?.results?.[method]?.top5"></td></tr></template></tbody></table>
+            <p class="text-slate-400">These are counts out of the evaluated examples, not a held-out accuracy estimate. To apply a trial weight, enter it as the live weight above and save.</p>
+          </div>
+        </div>
+        <p x-show="!matchingSettings.tuning_enabled" class="text-sm text-slate-400">Enable and save evaluation and tuning to compare methods.</p>
+      </div>
+    </section>
+    <section x-show="token && section === 'amos' && amosTab === 'connection'" class="bg-slate-950 border border-slate-800 rounded-2xl max-w-2xl p-6 space-y-5" aria-label="AMOS connection settings">
+      <h2 class="text-lg font-semibold">Connection settings</h2>
+      <p class="text-sm text-slate-400">Configure the AMOS source and how often its data is refreshed.</p>
+      <label class="block text-sm">Data source<select x-model="amosForm.source" class="block mt-2 bg-slate-900 border border-slate-800 rounded-lg p-2"><option value="database">Direct database (automatic refresh)</option><option value="csv">CSV uploads (manual refresh)</option></select></label>
+        <div class="space-y-3 text-xs">
+          <div><label class="text-slate-400">Host</label><input type="text" x-model="amosForm.host" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 mt-1"></div>
+          <div><label class="text-slate-400">Port</label><input type="number" x-model="amosForm.port" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 mt-1"></div>
+          <div><label class="text-slate-400">Database Name</label><input type="text" x-model="amosForm.dbname" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 mt-1"></div>
+          <div><label class="text-slate-400">User</label><input type="text" x-model="amosForm.user" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 mt-1"></div>
+          <div><label class="text-slate-400">Password (leave blank to keep saved password)</label><input type="password" x-model="amosForm.password" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 mt-1"></div>
+          <div><label class="text-slate-400">Refresh interval (hours)</label><input type="number" min="1" x-model.number="amosForm.refresh_interval_hours" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 mt-1"></div>
+        </div>
+      <div class="pt-4 border-t border-slate-800">
+        <button @click="saveAmosConfig()" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-sm font-semibold rounded-lg">Save Configuration</button>
+      </div>
+    </section>
+
+    <div x-show="token && (showCache || (section === 'amos' && amosTab === 'cache'))" :class="showCache ? 'fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50' : ''" :role="showCache ? 'dialog' : 'region'" aria-label="Cached AMOS data">
+      <div :class="showCache ? 'max-w-5xl max-h-[90vh]' : ''" class="bg-slate-950 border border-slate-800 rounded-2xl w-full p-6 overflow-y-auto space-y-4">
+        <div class="flex justify-between"><h3 class="text-lg font-bold" x-text="pickerTarget ? 'Choose any cached AMOS part' : 'Cached AMOS data'"></h3><button x-show="showCache" @click="showCache = false" aria-label="Close cache" class="text-slate-400">Close</button></div>
+        <p x-show="showCache && error" x-text="error" role="alert" class="text-red-300"></p>
+        <div x-show="pickerTarget" class="space-y-3">
+          <dl class="rounded-lg border border-slate-700 bg-slate-900 p-3 space-y-2">
+            <div><dt class="text-xs text-slate-400">Reference part number</dt><dd class="font-mono font-semibold break-all" data-testid="reference-part-number" x-text="(pickerTarget === '__ROOT__' ? uploadResult.detected_root_pn : pickerTarget) || 'Not provided'"></dd></div>
+            <div><dt class="text-xs text-slate-400">Original description</dt><dd class="text-sm break-words" data-testid="reference-description" x-text="(pickerTarget === '__ROOT__' ? uploadResult.root_description : candidates.pn_descriptions?.[pickerTarget]) || 'Not provided'"></dd></div>
+          </dl>
+          <label class="text-sm text-slate-400">Search method
+            <select x-model="searchMode" @change="loadCache(true)" aria-label="Part search method" class="ml-3 bg-slate-900 p-2 rounded-lg"><option value="text">Text search</option><option value="hybrid">Part number + description meaning</option></select>
+          </label>
+          <div x-show="searchMode === 'hybrid'" class="space-y-2">
+            <label class="block text-sm text-slate-400">Description meaning<input x-model="searchDescription" @input.debounce.500ms="loadCache(true)" aria-label="Description meaning" placeholder="e.g. lubrication fluid delivery pump" class="block mt-1 w-full bg-slate-900 p-2 rounded-lg"></label>
+            <p class="text-xs text-slate-400">Part numbers use exact and fuzzy comparison. Descriptions use meaning. Suggestions require your selection.</p>
+            <p x-show="hybridInfo?.semantic_used && hybridInfo?.index?.status !== 'READY'" class="text-sm text-amber-300">The description index is still building. Semantic results currently cover only indexed descriptions.</p>
+            <p x-show="hybridInfo && !hybridInfo.semantic_used" class="text-sm text-amber-300">Semantic search is not available yet or no description was entered. PN and description text search remain available. Index: <span x-text="hybridInfo?.index?.status"></span>.</p>
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-3">
+          <select x-show="!pickerTarget" x-model="cacheKind" @change="loadCache(true)" class="bg-slate-900 p-2 rounded-lg" aria-label="Cache category">
+            <option value="parts">Parts & descriptions</option><option value="relationships">Part relationships</option><option value="positions">Functional positions</option><option value="documents">Documents</option>
+          </select>
+          <input type="search" x-model="cacheQuery" @input.debounce.300ms="loadCache(true)" :placeholder="pickerTarget && searchMode === 'hybrid' ? 'Part number (optional)…' : 'Search part number, description, or value…'" aria-label="Search cached data" class="bg-slate-900 p-2 rounded-lg flex-1 min-w-0">
+        </div>
+        <p x-show="hybridInfo?.reranker_warning" x-text="hybridInfo?.reranker_warning" role="status" class="text-sm text-amber-300"></p>
+        <p x-show="cacheLoading" role="status" class="text-blue-300">Loading…</p>
+        <div x-show="!pickerTarget || searchMode === 'text'" class="overflow-x-auto"><table class="w-full text-sm text-left">
+          <thead><tr><template x-for="column in cache.columns" :key="column"><th class="p-2 text-slate-400" x-text="column.replaceAll('_', ' ')"></th></template><th x-show="pickerTarget" class="p-2">Select</th></tr></thead>
+          <tbody><template x-for="(row, index) in cache.items" :key="index"><tr class="border-t border-slate-800"><template x-for="column in cache.columns" :key="column"><td class="p-2" x-text="row[column]"></td></template><td x-show="pickerTarget" class="p-2"><button @click="pickPart(row)" :disabled="cacheLoading" class="text-blue-400">Use this part</button></td></tr></template></tbody>
+        </table></div>
+        <div x-show="pickerTarget && searchMode === 'hybrid'" class="overflow-x-auto">
+          <table class="w-full text-sm text-left"><thead><tr class="text-slate-400"><th class="p-2">Part number</th><th class="p-2">Description</th><th class="p-2">Evidence</th><th class="p-2">Configuration</th><th class="p-2">Select</th></tr></thead>
+          <tbody><template x-for="row in hybridItems" :key="row.part_number"><tr class="border-t border-slate-800"><td class="p-2" x-text="row.part_number"></td><td class="p-2" x-text="row.description"></td><td class="p-2"><div x-text="row.match_type"></div><div x-show="row.cross_encoder_score != null">Cross-encoder: <span x-text="row.cross_encoder_score"></span></div><div x-show="row.pn_score != null">PN similarity: <span x-text="row.pn_score"></span></div><div x-show="row.semantic_score != null">Meaning similarity: <span x-text="row.semantic_score"></span></div><div x-show="row.description_score != null">Text similarity: <span x-text="row.description_score"></span></div></td><td class="p-2" x-text="!confirmedRootPn ? 'Root not yet confirmed' : (row.in_configuration ? 'Within root' : 'Outside root')"></td><td class="p-2"><button @click="pickPart(row)" :disabled="cacheLoading" class="text-blue-400">Use this part</button></td></tr></template></tbody></table>
+          <p x-show="!cacheLoading && !hybridItems.length" class="text-slate-400 p-3">Enter a part number or description to find suggestions.</p>
+          <p class="text-xs text-slate-500 mt-3">Top 50 suggestions. Scores indicate similarity, not interchangeability.</p>
+        </div>
+        <p x-show="(!pickerTarget || searchMode === 'text') && !cacheLoading && !cache.total" class="text-slate-400">No cached records found. Check your search, run an AMOS sync, or import CSV files.</p>
+        <div x-show="!pickerTarget || searchMode === 'text'" class="flex justify-between text-sm"><button @click="cacheOffset -= 50; loadCache()" :disabled="cacheLoading || cacheOffset === 0">Previous</button><span><span x-text="cache.total ? cacheOffset + 1 : 0"></span>–<span x-text="Math.min(cacheOffset + 50, cache.total)"></span> of <span x-text="cache.total"></span></span><button @click="cacheOffset += 50; loadCache()" :disabled="cacheLoading || cacheOffset + 50 >= cache.total">Next</button></div>
+      </div>
+    </div>
+
+  </main>
+
+  <script src="/app.js?v=20260907-matching-settings"></script>
+</body>
+</html>

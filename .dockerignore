@@ -1,0 +1,8 @@
+.venv
+.git
+.agents
+.codex
+__pycache__
+*.pyc
+uploads
+.env

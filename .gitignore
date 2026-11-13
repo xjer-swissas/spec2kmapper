@@ -13,3 +13,11 @@ AMOScentral/
 .agents/
 .codex/
 .aws/
+
+# Local runtime and experimental data
+*.log
+*.ses
+experiments/
+.pytest_cache/
+.coverage
+htmlcov/

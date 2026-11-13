@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: amos_postgres_app
+    environment:
+      POSTGRES_USER: app_admin
+      POSTGRES_PASSWORD: AppSecurePassword2026
+      POSTGRES_DB: amos_app_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app_admin -d amos_app_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-${http_proxy:-}}
+        HTTPS_PROXY: ${HTTPS_PROXY:-${https_proxy:-}}
+        NO_PROXY: ${NO_PROXY:-${no_proxy:-}}
+        http_proxy: ${http_proxy:-${HTTP_PROXY:-}}
+        https_proxy: ${https_proxy:-${HTTPS_PROXY:-}}
+        no_proxy: ${no_proxy:-${NO_PROXY:-}}
+    container_name: amos_backend_app
+    environment:
+      DATABASE_URL: postgresql://app_admin:AppSecurePassword2026@postgres:5432/amos_app_db
+      SECRET_KEY: super-secret-jwt-key-change-this-in-production-2026!
+      ACCESS_TOKEN_EXPIRE_MINUTES: 1440
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+
+volumes:
+  pgdata:
