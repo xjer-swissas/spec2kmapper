@@ -351,12 +351,24 @@
           <div><label class="text-slate-400">Refresh interval (hours)</label><input type="number" min="1" x-model.number="amosForm.refresh_interval_hours" class="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 mt-1"></div>
         </div>
       <div x-show="amosForm.source === 'amoscentral'" class="space-y-3 text-sm">
-        <p>Parts, configurations, and documents arrive as separate messages. The cache updates when a complete snapshot is received.</p>
+        <p>Each parts, configuration, or documents message updates its own data immediately. Other cached data is preserved.</p>
         <label class="block">Tenant AMOScentral sender address<input type="text" x-model="amosForm.amoscentral_address" :disabled="!matchingSettings.is_admin" placeholder="com.swiss-as.amos.customer.prod" class="block w-full mt-2 bg-slate-900 border border-slate-800 rounded-lg p-2 font-mono"></label>
         <p>Receiver: <span x-text="sync.central?.state || 'DISABLED'"></span></p>
-        <template x-for="snapshot in (sync.central?.snapshots || [])" :key="snapshot.batch_id">
-          <p class="text-xs text-slate-400"><span class="font-mono" x-text="snapshot.batch_id"></span>: <span x-text="snapshot.status"></span><span x-show="snapshot.status === 'PENDING'" x-text="' — received ' + snapshot.received.join(', ')"></span></p>
-        </template>
+        <p x-show="sync.central?.last_error" class="text-amber-300" x-text="sync.central?.last_error"></p>
+        <div class="space-y-2" aria-label="AMOScentral message consumption log">
+          <h3 class="font-semibold">Message consumption log</h3>
+          <p x-show="!(sync.central?.events || []).length" class="text-slate-400">No message events recorded for this sender yet.</p>
+          <div class="max-h-96 overflow-auto space-y-2">
+            <template x-for="event in (sync.central?.events || [])" :key="event.id">
+              <div class="border border-slate-800 rounded-lg p-3 text-xs space-y-1">
+                <p><time x-text="new Date(event.created_at).toLocaleString()"></time> · <strong :class="['REJECTED', 'RETRYING', 'ACK_FAILED'].includes(event.status) ? 'text-amber-300' : 'text-slate-200'" x-text="event.status"></strong></p>
+                <p class="font-mono break-all">amc_2k5mapper_product_header: <strong x-text="event.export_header_value ?? ({parts: 'part_definition', configurations: 'configuration'}[event.export_kind] || event.export_kind) ?? 'Not recorded'"></strong></p>
+                <p class="font-mono break-all" x-text="event.message_id || 'Message could not be parsed'"></p>
+                <p class="whitespace-pre-wrap break-words" x-text="event.detail || ''"></p>
+              </div>
+            </template>
+          </div>
+        </div>
         <p class="text-slate-400">Tenant administrators assign the sender address. The operator manages the application’s AMOScentral credentials. No database connection is needed for this method.</p>
       </div>
       <div class="pt-4 border-t border-slate-800">

@@ -1,18 +1,17 @@
 """Wire envelope derived from amc-message-builder 1.3.1 (UTF-8 + EOT + bytes)."""
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import re
 from uuid import uuid4
 
 from .errors import ProtocolError
 
 MAX_HEADER_BYTES = 64000
-ADDRESS = re.compile(r"[a-z](?:[a-z0-9_-]*[a-z0-9])?(?:\.[a-z](?:[a-z0-9_-]*[a-z0-9])?)+")
+ADDRESS = re.compile(r"[a-z](?:[a-z0-9_-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?)+", re.IGNORECASE)
 HEADER = re.compile(r"amc_[a-z0-9][a-z0-9_-]*[a-z0-9]")
 
 
 def validate_address(value):
-    if not isinstance(value, str) or len(value) > 64 or not ADDRESS.fullmatch(value):
+    if not isinstance(value, str) or not ADDRESS.fullmatch(value):
         raise ProtocolError("Invalid AMOScentral address")
     return value
 
@@ -41,9 +40,9 @@ class Message:
 
     def validate(self):
         for key, value in self.headers.items():
-            if not isinstance(key, str) or not HEADER.fullmatch(key) or len(key) > 64:
+            if not isinstance(key, str) or not HEADER.fullmatch(key):
                 raise ProtocolError("Invalid AMOScentral header name")
-            if not isinstance(value, str) or len(value) > 256 or any(ord(c) < 32 or ord(c) == 127 for c in value):
+            if not isinstance(value, str) or any(ord(c) < 32 or ord(c) == 127 for c in value):
                 raise ProtocolError("Invalid AMOScentral header value")
         for key in ("amc_message_id", "amc_service", "amc_service_version"):
             if not self.headers.get(key):
@@ -52,17 +51,9 @@ class Message:
         validate_address(self.recipient)
         validate_address(self.headers["amc_service"])
         version = self.headers["amc_service_version"]
-        pattern = r"\d+\.\d+(?:\.\d+)?" if self.headers["amc_service"].startswith("com.swiss-as.amos.aim.") else r"\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?"
+        pattern = r"\d+\.\d+(?:\.\d+)?" if self.headers["amc_service"].lower().startswith("com.swiss-as.amos.aim.") else r"\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?"
         if not re.fullmatch(pattern, version):
             raise ProtocolError("Invalid service version")
-        expiry = self.headers.get("amc_expiry")
-        if expiry:
-            try:
-                dt = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
-                if dt.tzinfo is None or dt <= datetime.now(timezone.utc):
-                    raise ValueError()
-            except ValueError:
-                raise ProtocolError("Invalid or expired amc_expiry") from None
 
     def to_bytes(self):
         self.validate()

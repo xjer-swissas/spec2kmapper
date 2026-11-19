@@ -38,7 +38,7 @@ class ClientConfig:
             raise ProtocolError("AMOScentral password and OAuth client_id are required")
         if not Path(self.state_dir).is_absolute():
             raise ProtocolError("AMOScentral state_dir must be an absolute external directory")
-        if self.read_timeout <= 30 or self.connect_timeout <= 0 or not 1 <= self.max_body_bytes <= 100 * 1024 * 1024:
+        if self.read_timeout <= 0 or self.connect_timeout <= 0 or self.max_body_bytes <= 0:
             raise ProtocolError("Invalid AMOScentral timeout or message size limit")
 
     def state_path(self, value):

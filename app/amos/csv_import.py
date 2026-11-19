@@ -24,18 +24,20 @@ def parse_export(stream, kind):
         raise ValueError(f'{kind}: invalid CSV near line {reader.line_num}: {exc}') from None
 
 
-def validate_table(header, values, kind):
+def validate_table(header, values, kind, *, allow_empty_master=False):
     """Shared validation for CSV imports and AMOScentral XML tables."""
     columns = EXPORTS[kind]['columns']
     header = [cell.strip().lower() for cell in header]
     if len(header) != len(columns) or set(header) != set(columns):
-        raise ValueError(f'{kind}: expected headers: {", ".join(columns)}')
+        missing = ', '.join(sorted(set(columns) - set(header))) or 'none'
+        unexpected = ', '.join(sorted(set(header) - set(columns))) or 'none'
+        raise ValueError(f'{kind}: expected headers: {", ".join(columns)}; missing: {missing}; unexpected: {unexpected}; received {len(header)} columns')
     rows = []
     for number, cells in enumerate(values, 2):
         if not cells:
             continue
         if len(cells) != len(header):
-            raise ValueError(f'{kind}: row {number} has the wrong number of columns')
+            raise ValueError(f'{kind}: row {number} has {len(cells)} columns; expected {len(header)}')
         row = dict(zip(header, (value.strip() for value in cells)))
         required = {'parts': ['part_number'], 'configurations': ['parent_pn', 'child_pn'], 'documents': ['pn', 'docno']}[kind]
         for key in required:
@@ -45,7 +47,7 @@ def validate_table(header, values, kind):
             if '\x00' in value or ('description' not in key and len(value) > 255):
                 raise ValueError(f'{kind}: row {number} has an invalid {key}')
         rows.append(row)
-    if kind == 'parts' and not rows:
+    if kind == 'parts' and not rows and not allow_empty_master:
         raise ValueError('parts: at least one part is required')
     return rows
 

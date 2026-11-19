@@ -16,6 +16,7 @@ amoscentral-state
 *.jks
 AMOScentral
 config/amoscentral.toml
+amoscentral_local.toml
 experiments
 *.log
 *.ses

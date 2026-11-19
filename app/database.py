@@ -63,6 +63,7 @@ def init_master_tables():
             ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS pn_weight FLOAT NOT NULL DEFAULT 0.25;
             ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS amoscentral_last_snapshot_at TIMESTAMPTZ;
             ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS amoscentral_address VARCHAR(64);
+            ALTER TABLE public.tenants ALTER COLUMN amoscentral_address TYPE TEXT;
             CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_amoscentral_address
                 ON public.tenants(amoscentral_address) WHERE amoscentral_address IS NOT NULL;
             CREATE TABLE IF NOT EXISTS public.amoscentral_batches (
@@ -87,6 +88,26 @@ def init_master_tables():
             );
             CREATE INDEX IF NOT EXISTS idx_amoscentral_pending
                 ON public.amoscentral_batches(tenant_id, created_at) WHERE status = 'PENDING';
+            CREATE TABLE IF NOT EXISTS public.amoscentral_events (
+                id BIGSERIAL PRIMARY KEY,
+                message_id TEXT,
+                sender TEXT,
+                export_kind TEXT,
+                status TEXT NOT NULL,
+                detail TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_amoscentral_events_sender
+                ON public.amoscentral_events(sender, id DESC);
+            ALTER TABLE public.amoscentral_events ADD COLUMN IF NOT EXISTS export_header_value TEXT;
+            CREATE INDEX IF NOT EXISTS idx_amoscentral_events_timeline
+                ON public.amoscentral_events(sender, created_at DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_amoscentral_events_message
+                ON public.amoscentral_events(message_id);
+            INSERT INTO public.amoscentral_events (message_id, sender, status, detail, created_at)
+                SELECT r.message_id, r.sender, r.status, r.reason, r.received_at
+                FROM public.amoscentral_receipts r
+                WHERE NOT EXISTS (SELECT 1 FROM public.amoscentral_events e WHERE e.message_id=r.message_id);
             CREATE TABLE IF NOT EXISTS public.confirmed_mappings (
                 tenant_id INT NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
                 root_pn TEXT NOT NULL, source_pn TEXT NOT NULL, source_description TEXT NOT NULL,

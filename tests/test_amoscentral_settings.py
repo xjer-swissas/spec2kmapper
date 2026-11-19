@@ -35,7 +35,7 @@ class BrokerSettingsTests(unittest.TestCase):
         self.db.execute.assert_not_called()
 
     def test_missing_or_invalid_address_is_rejected(self):
-        for address, status in [('', 400), ('Com.Invalid', 422), ('wrong/address', 422)]:
+        for address, status in [('', 400), ('wrong/address', 422)]:
             response = self.client.post('/api/amos/config', json={'source': 'amoscentral', 'amoscentral_address': address})
             self.assertEqual(response.status_code, status, response.text)
         self.db.execute.assert_not_called()

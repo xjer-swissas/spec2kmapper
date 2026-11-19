@@ -22,6 +22,15 @@ class CentralReceiver:
         self.thread = None
         self.stop_event = threading.Event()
         self.state = 'DISABLED'
+        self.last_error = None
+
+    def failed(self, detail):
+        self.state = 'RETRYING'
+        self.last_error = detail
+
+    def healthy(self):
+        self.state = 'LISTENING'
+        self.last_error = None
 
     def start(self):
         if not settings.AMOSCENTRAL_CONFIG_FILE:
@@ -30,8 +39,9 @@ class CentralReceiver:
             return
         try:
             config, self.routing = load_config(settings.AMOSCENTRAL_CONFIG_FILE)
-        except Exception:
+        except Exception as exc:
             self.state = 'CONFIGURATION_ERROR'
+            self.last_error = f'Configuration could not be loaded ({type(exc).__name__})'
             logger.error('AMOScentral external configuration could not be loaded')
             return
         self.stop_event.clear()
@@ -55,11 +65,14 @@ class CentralReceiver:
                             self.client.connect()
                             inbox = BrokerInbox(SessionLocal, self.routing, self.client)
                             def handle(message):
-                                inbox(message)
-                                self.state = 'LISTENING'
+                                accepted = inbox(message)
+                                if accepted is not False:
+                                    self.state = 'LISTENING'
+                                return accepted
                             self.poller = Poller(self.client, handle,
-                                                 error_handler=lambda _: setattr(self, 'state', 'RETRYING'),
-                                                 success_handler=lambda: setattr(self, 'state', 'LISTENING'))
+                                                 error_handler=self.failed,
+                                                 success_handler=self.healthy,
+                                                 event_handler=inbox.event)
                             self.state = 'LISTENING'
                             self.poller.start()
                             try:
@@ -79,6 +92,7 @@ class CentralReceiver:
                             connection.commit()
             except Exception as exc:
                 self.state = 'RETRYING'
+                self.last_error = f'Connection unavailable ({type(exc).__name__})'
                 logger.warning('AMOScentral connection unavailable (%s)', type(exc).__name__)
                 self.stop_event.wait(30)
 
@@ -89,7 +103,7 @@ class CentralReceiver:
         self.state = 'STOPPED'
 
     def tenant_status(self, address=''):
-        return {'state': self.state, 'sender_address': address}
+        return {'state': self.state, 'sender_address': address, 'last_error': self.last_error}
 
 
 receiver = CentralReceiver()

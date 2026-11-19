@@ -49,56 +49,58 @@ An invalid file or missing identity leaves SQL/CSV usable and the receiver statu
 reports a configuration error or retries; no secret values are shown in the UI.
 Restart the backend after changing the external file or restoring a missing key.
 
-### Proposed AMOS export contract
+### AMOS export contract
 
-The sender-side export names have not yet been defined. These are configurable
-defaults, not an assertion that the AMOS export jobs already exist:
+All three exports use the same service and XML schema. The custom message header
+`amc_2k5mapper_product_header` identifies the export:
 
-| `dataSourceId` | Columns, matching the existing SQL aliases |
+| `amc_2k5mapper_product_header` | Columns, matching the existing SQL aliases |
 | --- | --- |
-| `parts` | `part_number`, `description` |
-| `configurations` | `parent_pn`, `fp_code`, `fp_description`, `child_pn` |
+| `part_definition` | `part_number`, `description` |
+| `configuration` | `parent_pn`, `fp_code`, `fp_description`, `child_pn` |
 | `documents` | `pn`, `docno` |
 
 Each message contains one XML document conforming to
 `app/amos/schemas/exportDataSource_1.0.xsd`. The XML root is
-`<exportDataSource version="1.0">`. Header `cellDefinition/name` values identify
+`<exportDataSource version="1.0">`. The export may also arrive inside
+`amosTransportEnvelope/payload`; the importer extracts that export before XSD
+validation. Header `cellDefinition/name` values identify
 columns, and `row/value` cells follow their header order. Identifiers remain text.
-Empty configurations/documents have a header and zero rows; the parts master
-must contain at least one part. Each decoded export is limited to 25 MB.
+Empty exports are accepted, including an empty parts master. The configured
+`amoscentral.max_body_bytes` bounds decoded payloads (25 MB by default) to prevent
+unbounded memory consumption. XML document types and external entities are not accepted.
 
-All three messages for one refresh must share a **new** `amc_correlation_id`.
-Configure the same `amc_service` and `amc_service_version` in AMOS and the external
-file, enable end-to-end encryption, and request `amc_requested_ack: technical`.
-The broker sets `amc_sender`; the recipient is the application's configured
-address. Configure `routing.product` as well if the integration uses `amc_product`.
-`routing.data_source_ids` and `routing.batch_header` can override the defaults.
+The service is fixed to `com.swiss-as.amos.aim.export_data_source` and the version
+is `1.0` by default. The custom header above selects the table independently of
+XML `dataSourceId`. Set `routing.export_type_header = ""` only for legacy routing
+by configured `routing.data_source_ids`.
 
-For ordering, prefer a shared UTC snapshot timestamp in a configured
-`routing.snapshot_header` such as `amc_snapshot_time`. All messages in a refresh
-should then carry that same value. The default `amc_send_time` uses the earliest
-component's send time: AMOS must generate snapshots sequentially without
-interleaving batches. The client cannot infer a coherent batch or data version
-from unrelated messages, and older completed snapshots cannot overwrite newer ones.
+Each message updates its own data immediately, preserving other cached tables
+and rebuilding inherited relationships. Messages can arrive in any order. No
+correlation ID, send timestamp, product, requested acknowledgement, encryption,
+shared batch ID, or complete set of three messages is required. Plain XML, gzip,
+and supported encrypted messages are decoded according to their encoding headers.
+Legacy encryption/product/batch settings are accepted for configuration compatibility
+but no longer impose receiving restrictions. No pending snapshot limits or expiry apply.
+Repeated part numbers use the last row's description. Identifier/column validation
+is retained where required by the cache schema and the SQL export definitions.
 
-Each component is validated and committed to PostgreSQL before technical ACK.
-When all three arrive, the cache, successful-sync status, snapshot version and
-receipt commit in one transaction. Only then is the search index refreshed.
-Incomplete snapshots survive restarts and leave the previous cache available.
-Duplicates are idempotent; conflicting components are rejected. Completed
-snapshots retain replay guards but release staged row data. Pending batches
-expire after seven days by default, with ten pending batches allowed per tenant.
-Saving connection settings or importing CSV cancels that tenant's incomplete batches.
+The tenant sender assignment remains necessary to route messages to the correct
+customer. Only tenants using AMOScentral accept imports. An import and its receipt
+commit atomically; redelivery of the same committed message does not import again.
+Database and key-retrieval failures are retried. Invalid messages are recorded as
+rejected and left unacknowledged on the broker for correction or operator action.
+They are retried with a delay, rather than silently removed from the queue.
 
-Unknown senders, unexpected services, missing batch headers, and invalid exports
-get a durable `REJECTED` receipt and are then acknowledged so they cannot block
-the queue. Rejection records contain metadata and an error category, not the XML
-body. Failed database writes, key retrieval, or decryption leave messages
-unacknowledged for retry. An envelope too malformed to identify safely also remains
-unacknowledged and needs operator intervention. The connection screen shows the
-receiver state and recent snapshot/component status. Operators can inspect
-`public.amoscentral_receipts` for rejected deliveries. Sender address assignment
-is an administrator trust decision; assigning an address does not prove ownership.
+**AMOS DB → Connection settings → Message consumption log** shows received,
+validated, imported, rejected, retrying, unacknowledged, and acknowledged events.
+Validation details include schema errors, XML line/column positions, expected
+columns, and invalid row/field locations. Events are stored in
+`public.amoscentral_events`; final processing results are in
+`public.amoscentral_receipts`. Tenant users see only their assigned sender's events;
+administrators also see unparsed connection/receive failures. Passwords, tokens,
+private keys, raw headers, and full XML bodies are never logged. Runtime connection
+errors remain visible in the receiver status even when the database is unavailable.
 
 ### Validation
 

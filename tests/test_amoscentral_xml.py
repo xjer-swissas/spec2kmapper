@@ -23,14 +23,61 @@ def export(kind, columns, rows):
 class XmlImportTests(unittest.TestCase):
     ids = {'parts': 'parts', 'configurations': 'configurations', 'documents': 'documents'}
 
+    def test_transport_envelope_payload_is_validated_and_imported(self):
+        from lxml import etree
+        body = export('documents', ['pn', 'docno'], [['001', 'DOC1']])
+        wrapper = etree.Element('amosTransportEnvelope', version='1.0')
+        etree.SubElement(wrapper, 'header')
+        payload = etree.SubElement(wrapper, 'payload', type='exportDataSource', version='1.0')
+        payload.append(etree.fromstring(body))
+        self.assertEqual(parse_data_source(etree.tostring(wrapper), self.ids),
+                         ('documents', [{'pn': '001', 'docno': 'DOC1'}]))
+        payload[0].set('version', '2.0')
+        with self.assertRaisesRegex(ValueError, 'Invalid exportDataSource'):
+            parse_data_source(etree.tostring(wrapper), self.ids)
+
+    def test_transport_envelope_rejects_missing_or_ambiguous_payload(self):
+        from lxml import etree
+        wrapper = etree.Element('amosTransportEnvelope')
+        payload = etree.SubElement(wrapper, 'payload')
+        with self.assertRaisesRegex(ValueError, 'exactly one'):
+            parse_data_source(etree.tostring(wrapper), self.ids)
+        body = export('documents', ['pn', 'docno'], [])
+        payload.extend([etree.fromstring(body), etree.fromstring(body)])
+        with self.assertRaisesRegex(ValueError, 'exactly one'):
+            parse_data_source(etree.tostring(wrapper), self.ids)
+
+    def test_custom_header_selects_export_independently_of_xml_id(self):
+        from app.amos.central_config import RoutingConfig
+        routing = RoutingConfig(data_source_ids=self.ids,
+                                export_type_header='amc_2k5mapper_product_header')
+        for value, kind, columns, rows in [
+            ('part_definition', 'parts', ['part_number', 'description'], [['001', 'Pump']]),
+            ('configuration', 'configurations', ['parent_pn', 'fp_code', 'fp_description', 'child_pn'], []),
+            ('documents', 'documents', ['pn', 'docno'], []),
+        ]:
+            with self.subTest(value=value):
+                selected = routing.export_kind({'amc_2k5mapper_product_header': value})
+                actual, _ = parse_data_source(export('sender-export-id', columns, rows),
+                                              self.ids, export_kind=selected)
+                self.assertEqual(actual, kind)
+        for headers in [{}, {'amc_2k5mapper_product_header': 'unknown'}]:
+            with self.assertRaises(ValueError):
+                routing.export_kind(headers)
+
     def test_schema_leading_zeros_and_reordered_columns(self):
         kind, rows = parse_data_source(export('parts', ['DESCRIPTION', 'PART_NUMBER'], [['Pümp', '001']]), self.ids)
         self.assertEqual((kind, rows), ('parts', [{'description': 'Pümp', 'part_number': '001'}]))
 
-    def test_empty_optional_exports_and_nonempty_master(self):
+    def test_empty_exports_are_valid(self):
         self.assertEqual(parse_data_source(export('documents', ['pn', 'docno'], []), self.ids), ('documents', []))
-        with self.assertRaises(ValueError):
-            parse_data_source(export('parts', ['part_number', 'description'], []), self.ids)
+        self.assertEqual(parse_data_source(export('parts', ['part_number', 'description'], []), self.ids), ('parts', []))
+
+    def test_validation_error_identifies_xml_location_and_column_problem(self):
+        with self.assertRaisesRegex(ValueError, 'line'):
+            parse_data_source(b'<exportDataSource>', self.ids)
+        with self.assertRaisesRegex(ValueError, 'expected headers'):
+            parse_data_source(export('parts', ['wrong'], [['001']]), self.ids)
 
     def test_invalid_xml_columns_entities_version_and_unknown_source(self):
         valid = export('parts', ['part_number', 'description'], [['001', 'Pump']])

@@ -21,6 +21,19 @@ def message(body=b'\x00binary\x04payload\xff'):
 
 
 class EnvelopeTests(unittest.TestCase):
+    def test_opaque_expiry_and_long_metadata_are_not_rejected(self):
+        value = message()
+        value.headers['amc_expiry'] = '60000'
+        value.headers['amc_custom_metadata'] = 'x' * 1000
+        value.headers['amc_sender'] = 'Com.Example.' + 'x' * 80
+        self.assertEqual(Message.from_bytes(value.to_bytes()), value)
+
+    def test_export_data_source_service_round_trip(self):
+        value = message()
+        value.headers['amc_service'] = 'com.swiss-as.amos.aim.export_data_source'
+        value.headers['amc_service_version'] = '1.0'
+        self.assertEqual(Message.from_bytes(value.to_bytes()), value)
+
     def test_binary_envelope_and_colon_in_utf8_header(self):
         value = message()
         value.headers['amc_send_time'] = '2026-11-13T12:34:56Z'
@@ -166,6 +179,27 @@ class RestTests(unittest.TestCase):
                         error_handler=lambda _: poller.stop_event.set())
         poller.run()
         client.acknowledge.assert_not_called()
+
+    def test_rejected_message_is_retained_and_consumption_events_are_emitted(self):
+        client = Mock()
+        client.receive_message.return_value = message()
+        events = []
+        poller = Poller(client, lambda _: False,
+                        error_handler=lambda _: poller.stop_event.set(),
+                        event_handler=lambda m, status, detail: events.append(status))
+        poller.run()
+        client.acknowledge.assert_not_called()
+        self.assertEqual(events, ['UNACKNOWLEDGED'])
+
+    def test_ack_success_is_logged_after_handler_commit(self):
+        client = Mock()
+        client.receive_message.return_value = message()
+        events = []
+        poller = Poller(client, lambda _: events.append('COMMIT'),
+                        event_handler=lambda m, status, detail: events.append(status))
+        client.acknowledge.side_effect = lambda *a, **k: poller.stop_event.set()
+        poller.run()
+        self.assertEqual(events, ['COMMIT', 'ACKNOWLEDGED'])
 
     def test_management_bindings_encode_parameters_and_return_binary_downloads(self):
         with tempfile.TemporaryDirectory() as folder:

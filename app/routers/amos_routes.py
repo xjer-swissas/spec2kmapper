@@ -118,11 +118,16 @@ def get_sync_status(user: dict = Depends(get_current_user), db: Session = Depend
     from app.matching.catalog import status
     from app.amos.central import receiver
     central = receiver.tenant_status(row[5] or '')
-    batches = db.execute(text('''
-        SELECT batch_id, status, ARRAY(SELECT jsonb_object_keys(b.exports))
-        FROM public.amoscentral_batches b WHERE tenant_id=:id ORDER BY created_at DESC LIMIT 10
-    '''), {'id': user['tenant_id']}).fetchall()
-    central['snapshots'] = [{'batch_id': batch[0], 'status': batch[1], 'received': batch[2]} for batch in batches]
+    events = db.execute(text('''SELECT id, message_id, export_kind, export_header_value, status, detail, created_at
+        FROM public.amoscentral_events
+        WHERE (sender=:sender AND :sender <> '') OR (:admin AND sender IS NULL)
+        ORDER BY created_at DESC, id DESC LIMIT 100'''),
+        {'sender': row[5] or '', 'admin': bool(user.get('is_admin'))}).mappings().all()
+    central['events'] = [dict(event) for event in events]
+    legacy_kinds = {'parts': 'part_definition', 'configurations': 'configuration'}
+    for event in central['events']:
+        if event['export_header_value'] is None:
+            event['export_header_value'] = legacy_kinds.get(event['export_kind'], event['export_kind'])
     return dict(status=row[0], phase=row[1], error=row[2], started_at=row[3],
                 last_success_at=row[4], counts=counts, index=status(s), central=central)
 

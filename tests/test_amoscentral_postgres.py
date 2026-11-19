@@ -37,6 +37,7 @@ class BrokerPostgresTests(unittest.TestCase):
 
     def setUp(self):
         with self.engine.begin() as conn:
+            conn.execute(text('TRUNCATE public.amoscentral_events RESTART IDENTITY'))
             conn.execute(text('TRUNCATE public.tenants RESTART IDENTITY CASCADE'))
             for suffix in ['a', 'b']:
                 conn.execute(text('''INSERT INTO public.tenants
@@ -48,7 +49,7 @@ class BrokerPostgresTests(unittest.TestCase):
                 conn.execute(text(f"INSERT INTO tenant_amc_{suffix}.amos_part_master VALUES ('OLD', 'Previous cache')"))
         self.receiver = ec.generate_private_key(ec.SECP256R1())
         self.senders = {name: ec.generate_private_key(ec.SECP256R1()) for name in ['a', 'b']}
-        self.routing = RoutingConfig('com.example.export', {k: k for k in EXPORTS})
+        self.routing = RoutingConfig(data_source_ids={k: k for k in EXPORTS})
         class Client: pass
         self.client = Client()
         self.client.codec = MessageCodec([self.receiver], lambda sender: [self.senders[sender.rsplit('.', 1)[-1]].public_key()])
@@ -62,8 +63,8 @@ class BrokerPostgresTests(unittest.TestCase):
                     'configurations': [['ROOT', 'FP1', 'Position', 'CHILD']], 'documents': [['CHILD', 'DOC1']]}
         body = export(kind, EXPORTS[kind]['columns'], defaults[kind] if rows is None else rows)
         message = (MessageBuilder().set_sender('com.example.' + sender).set_recipient('com.example.mapper')
-                   .for_service('com.example.export').with_correlation_id(batch)
-                   .add_property('amc_requested_ack', 'technical')
+                   .for_service('com.swiss-as.amos.aim.export_data_source').in_version('1.0').with_correlation_id(batch)
+                   .add_property('amc_2k5mapper_product_header', {'parts':'part_definition','configurations':'configuration','documents':'documents'}[kind])
                    .add_property('amc_send_time', (when or self.when).isoformat()).set_content(body).build())
         return MessageCodec([self.senders[sender]], lambda _: [self.receiver.public_key()]).encode(message, compress=True)
 
@@ -71,111 +72,73 @@ class BrokerPostgresTests(unittest.TestCase):
         with self.engine.connect() as conn:
             return conn.execute(text(statement), params or {}).scalar_one()
 
-    def complete(self, batch='snapshot-1', when=None, sender='a'):
-        for kind in ['documents', 'parts', 'configurations']:
-            self.inbox(self.message(kind, batch, when, sender))
+    def test_each_export_updates_immediately_preserving_other_tables(self):
+        self.inbox(self.message('documents'))
+        self.assertEqual(self.value('SELECT part_number FROM tenant_amc_a.amos_part_master'), 'OLD')
+        self.assertEqual(self.value('SELECT count(*) FROM tenant_amc_a.doc_part_of_pn_conf'), 1)
+        self.inbox(self.message('parts'))
+        self.assertEqual(self.value('SELECT count(*) FROM tenant_amc_a.amos_part_master'), 2)
+        self.assertEqual(self.value('SELECT count(*) FROM tenant_amc_a.doc_part_of_pn_conf'), 1)
+        self.inbox(self.message('configurations'))
+        self.assertEqual(self.value("SELECT count(*) FROM tenant_amc_a.doc_part_of_pn_conf WHERE parent_pn='ROOT'"), 1)
+        self.assertEqual(self.value('SELECT part_number FROM tenant_amc_b.amos_part_master'), 'OLD')
+        self.assertEqual(self.value("SELECT count(*) FROM public.amoscentral_receipts WHERE status='IMPORTED'"), 3)
+        self.assertEqual(self.schedule.call_count, 3)
 
-    def test_partial_snapshot_survives_restart_and_updates_only_its_tenant(self):
+    def test_plain_export_without_correlation_timestamp_or_ack_request(self):
+        envelope = self.client.codec.decode(self.message('parts'))
+        for key in ['amc_correlation_id', 'amc_send_time', 'amc_requested_ack']:
+            envelope.headers.pop(key, None)
+        self.inbox(envelope)
+        self.assertEqual(self.value('SELECT count(*) FROM tenant_amc_a.amos_part_master'), 2)
+        self.assertEqual(self.value('SELECT status FROM public.amoscentral_receipts'), 'IMPORTED')
+
+    def test_redelivery_is_idempotent_and_repeated_export_replaces_previous(self):
         first = self.message('parts')
         self.inbox(first)
-        self.assertEqual(self.value('SELECT part_number FROM tenant_amc_a.amos_part_master'), 'OLD')
+        self.inbox(first)
         self.assertEqual(self.value('SELECT count(*) FROM public.amoscentral_receipts'), 1)
-        self.inbox = BrokerInbox(self.sessions, self.routing, self.client)
-        self.inbox(self.message('documents'))
-        self.inbox(self.message('configurations'))
-        self.assertEqual(self.value('SELECT count(*) FROM tenant_amc_a.amos_part_master'), 2)
-        self.assertEqual(self.value('SELECT part_number FROM tenant_amc_b.amos_part_master'), 'OLD')
-        self.assertEqual(self.value("SELECT count(*) FROM tenant_amc_a.doc_part_of_pn_conf WHERE parent_pn='ROOT'"), 1)
-        self.assertEqual(self.value('SELECT status FROM public.amoscentral_batches'), 'COMPLETE')
-        self.assertEqual(self.value('SELECT exports FROM public.amoscentral_batches'), {})
-        self.schedule.assert_called_once_with('tenant_amc_a')
-        self.inbox(first)  # ACK loss / redelivery after commit.
-        self.assertEqual(self.value('SELECT count(*) FROM public.amoscentral_receipts'), 3)
         self.schedule.assert_called_once()
+        self.inbox(self.message('parts', rows=[['NEW', 'Replacement']]))
+        self.assertEqual(self.value('SELECT part_number FROM tenant_amc_a.amos_part_master'), 'NEW')
 
-    def test_batches_do_not_mix_and_older_completed_snapshot_cannot_replace_newer(self):
-        self.inbox(self.message('parts', 'old'))
-        self.inbox(self.message('documents', 'new', self.when + timedelta(seconds=10)))
-        self.assertEqual(self.value('SELECT part_number FROM tenant_amc_a.amos_part_master'), 'OLD')
-        self.complete('new', self.when + timedelta(seconds=10))
-        for kind in ['documents', 'configurations']:
-            self.inbox(self.message(kind, 'old'))
-        self.assertEqual(self.value("SELECT status FROM public.amoscentral_batches WHERE batch_id='old'"), 'SUPERSEDED')
-        self.assertEqual(self.value('SELECT count(*) FROM tenant_amc_a.amos_part_master'), 2)
-        self.schedule.assert_called_once()
-
-    def test_failed_final_write_rolls_back_and_redelivery_completes(self):
-        self.inbox(self.message('parts'))
-        self.inbox(self.message('documents'))
-        last = self.message('configurations')
+    def test_failed_write_rolls_back_and_redelivery_imports(self):
+        envelope = self.message('parts')
         with patch.object(AmosDataSyncer, 'replace_cache', side_effect=RuntimeError('simulated failure')):
             with self.assertRaises(RuntimeError):
-                self.inbox(last)
+                self.inbox(envelope)
         self.assertEqual(self.value('SELECT part_number FROM tenant_amc_a.amos_part_master'), 'OLD')
-        self.assertEqual(self.value('SELECT count(*) FROM public.amoscentral_receipts'), 2)
-        self.assertEqual(len(self.value('SELECT exports FROM public.amoscentral_batches')), 2)
-        self.inbox(last)
-        self.assertEqual(self.value('SELECT status FROM public.amoscentral_batches'), 'COMPLETE')
+        self.assertEqual(self.value('SELECT count(*) FROM public.amoscentral_receipts'), 0)
+        self.inbox(envelope)
+        self.assertEqual(self.value('SELECT status FROM public.amoscentral_receipts'), 'IMPORTED')
 
-    def test_unknown_sender_csv_mode_and_malformed_xml_are_durably_rejected(self):
-        unknown = self.message('parts')
-        unknown.headers['amc_sender'] = 'com.example.unknown'
-        with patch.object(self.client.codec, 'decode', wraps=self.client.codec.decode) as decode:
-            self.inbox(unknown)
-            decode.assert_not_called()
+    def test_invalid_rows_have_detailed_reason_and_are_not_acknowledged(self):
         invalid = self.message('parts', rows=[['', 'Missing part number']])
-        self.inbox(invalid)
-        self.inbox(self.message('parts', rows=[['001', 'Pump'], ['001', 'Different description']]))
-        with self.engine.begin() as conn:
-            conn.execute(text("UPDATE public.tenants SET amos_source='csv' WHERE schema_name='tenant_amc_a'"))
-        self.inbox(self.message('documents'))
-        self.assertEqual(self.value("SELECT count(*) FROM public.amoscentral_receipts WHERE status='REJECTED'"), 4)
-        self.assertEqual(self.value('SELECT count(*) FROM public.amoscentral_batches'), 0)
+        self.assertFalse(self.inbox(invalid))
+        self.assertIn('row 2 requires part_number', self.value('SELECT reason FROM public.amoscentral_receipts'))
+        self.assertEqual(self.value("SELECT count(*) FROM public.amoscentral_events WHERE status='REJECTED'"), 1)
         self.assertEqual(self.value('SELECT part_number FROM tenant_amc_a.amos_part_master'), 'OLD')
 
-    def test_conflicting_component_never_changes_the_staged_snapshot(self):
-        self.inbox(self.message('parts'))
-        self.inbox(self.message('parts', rows=[['DIFFERENT', 'Conflicting snapshot']]))
-        self.assertEqual(self.value("SELECT count(*) FROM public.amoscentral_receipts WHERE status='REJECTED'"), 1)
-        self.inbox(self.message('configurations'))
-        self.inbox(self.message('documents'))
-        self.assertEqual(self.value("SELECT count(*) FROM tenant_amc_a.amos_part_master WHERE part_number='ROOT'"), 1)
+    def test_empty_parts_and_repeated_identifiers_are_accepted(self):
+        self.inbox(self.message('parts', rows=[]))
+        self.assertEqual(self.value('SELECT count(*) FROM tenant_amc_a.amos_part_master'), 0)
+        self.inbox(self.message('parts', rows=[['001', 'First'], ['001', 'Last']]))
+        self.assertEqual(self.value('SELECT description FROM tenant_amc_a.amos_part_master'), 'Last')
 
-    def test_expired_batch_and_pending_limits(self):
-        self.inbox(self.message('parts', 'expired'))
-        with self.engine.begin() as conn:
-            conn.execute(text("UPDATE public.amoscentral_batches SET created_at=CURRENT_TIMESTAMP-INTERVAL '8 days'"))
-        from app.amos.scheduler import expire_broker_snapshots
-        with patch('app.amos.central.receiver.routing', self.routing), patch('app.amos.scheduler.SessionLocal', self.sessions):
-            expire_broker_snapshots()
-        self.assertEqual(self.value('SELECT exports FROM public.amoscentral_batches'), {})
-        self.routing.pending_batch_limit = 1
-        self.inbox(self.message('parts', 'current'))
-        self.assertEqual(self.value("SELECT status FROM public.amoscentral_batches WHERE batch_id='expired'"), 'EXPIRED')
-        self.inbox(self.message('parts', 'too-many'))
-        self.assertEqual(self.value('SELECT count(*) FROM public.amoscentral_batches'), 2)
-        self.assertEqual(self.value("SELECT count(*) FROM public.amoscentral_receipts WHERE status='REJECTED'"), 1)
-
-    def test_sender_addresses_are_unique(self):
-        from sqlalchemy.exc import IntegrityError
-        with self.assertRaises(IntegrityError), self.engine.begin() as conn:
-            conn.execute(text("UPDATE public.tenants SET amoscentral_address='com.example.a' WHERE schema_name='tenant_amc_b'"))
-
-    def test_status_exposes_only_this_tenants_pending_components(self):
+    def test_event_api_is_tenant_scoped_and_includes_diagnostics(self):
         from app.routers.amos_routes import get_sync_status
-        self.inbox(self.message('parts', sender='a'))
+        self.inbox(self.message('parts', sender='a', rows=[['', 'Invalid']]))
         self.inbox(self.message('documents', sender='b'))
         with self.sessions() as db, patch('app.matching.catalog.status', return_value={}):
             result = get_sync_status({'tenant_id': 1, 'schema_name': 'tenant_amc_a'}, db)
-        self.assertEqual(result['central']['sender_address'], 'com.example.a')
-        self.assertEqual(result['central']['snapshots'], [{'batch_id': 'snapshot-1', 'status': 'PENDING', 'received': ['parts']}])
+        events = result['central']['events']
+        self.assertEqual([e['status'] for e in events], ['REJECTED', 'RECEIVED'])
+        self.assertIn('requires part_number', events[0]['detail'])
+        self.assertEqual(events[0]['export_header_value'], 'part_definition')
 
-    def test_switching_source_cancels_incomplete_broker_snapshot(self):
-        from app.routers.amos_routes import update_amos_config, AmosConnectionConfig
-        self.inbox(self.message('parts'))
-        with self.sessions() as db:
-            update_amos_config(AmosConnectionConfig(source='csv', amoscentral_address='com.example.a'),
-                               {'tenant_id': 1, 'schema_name': 'tenant_amc_a', 'is_admin': True}, db)
-        self.assertEqual(self.value('SELECT status FROM public.amoscentral_batches'), 'EXPIRED')
-        self.inbox(self.message('documents'))
+    def test_unknown_sender_does_not_touch_cache_and_is_not_acknowledged(self):
+        unknown = self.message('parts')
+        unknown.headers['amc_sender'] = 'com.example.unknown'
+        self.assertFalse(self.inbox(unknown))
+        self.assertIn('no tenant', self.value('SELECT reason FROM public.amoscentral_receipts'))
         self.assertEqual(self.value('SELECT part_number FROM tenant_amc_a.amos_part_master'), 'OLD')

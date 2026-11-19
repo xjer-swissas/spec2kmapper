@@ -32,3 +32,4 @@ amoscentral-state/
 build/
 dist/
 config/amoscentral.toml
+amoscentral_local.toml

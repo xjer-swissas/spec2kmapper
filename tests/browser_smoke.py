@@ -46,8 +46,15 @@ def route_request(route):
         if route.request.method == 'PUT':
             data.update(route.request.post_data_json)
     elif path == '/api/amos/status':
+        if state.pop('fail_status_once', False):
+            return route.abort('connectionrefused')
         data = dict(status=state['sync'], phase='Loading documents' if state['sync'] == 'RUNNING' else 'Complete',
                     counts=dict(parts=100, relationships=20, positions=10, documents=5), last_success_at='2026-09-07T10:00:00')
+        data['central'] = dict(state='LISTENING', events=[
+            dict(id=2, message_id='rejected-message', export_kind='parts', status='REJECTED',
+                 detail='parts: row 2 requires part_number', created_at='2026-11-19T10:00:00Z'),
+            dict(id=1, message_id='imported-message', export_kind='documents', status='ACKNOWLEDGED',
+                 detail='Delivery acknowledged to AMOScentral', created_at='2026-11-19T09:59:00Z')])
     elif path == '/api/amos/config':
         if route.request.method == 'POST':
             state.update({k: route.request.post_data_json[k] for k in ['source', 'amoscentral_address']})
@@ -97,6 +104,15 @@ with sync_playwright() as p:
     page.get_by_role('button', name='Sign In', exact=True).click()
     expect(page.get_by_role('button', name='Start over', exact=True)).not_to_be_visible()
     page.get_by_role('button', name='AMOS DB', exact=True).click()
+    state['fail_status_once'] = True
+    page.evaluate('Alpine.$data(document.body).refreshStatus()')
+    expect(page.get_by_text('Cannot reach the server. Check your connection and try again.', exact=True).first).to_be_visible()
+    page.evaluate('Alpine.$data(document.body).refreshStatus()')
+    expect(page.get_by_text('Cannot reach the server. Check your connection and try again.', exact=True).first).not_to_be_visible()
+    page.evaluate("Alpine.$data(document.body).error = 'Validation error to preserve'")
+    page.evaluate('Alpine.$data(document.body).refreshStatus()')
+    expect(page.get_by_text('Validation error to preserve', exact=True).first).to_be_visible()
+    page.evaluate("Alpine.$data(document.body).error = ''")
     expect(page.get_by_text('Alternate oil pump', exact=True)).to_be_visible()
     page.get_by_role('button', name='SQL / CSV import', exact=True).click()
     assert 'SELECT DISTINCT' in page.get_by_label('parts SQL query').input_value()
@@ -124,6 +140,11 @@ with sync_playwright() as p:
     page.get_by_role('button', name='Save Configuration').click()
     expect(page.get_by_text('AMOS settings saved.', exact=True)).to_be_visible()
     assert state['amoscentral_address'] == 'com.swiss-as.amos.customer.prod'
+    expect(page.get_by_label('AMOScentral message consumption log')).to_be_visible()
+    expect(page.get_by_label('AMOScentral message consumption log').get_by_text('part_definition', exact=True)).to_be_visible()
+    expect(page.get_by_label('AMOScentral message consumption log').get_by_text('documents', exact=True)).to_be_visible()
+    expect(page.get_by_text('parts: row 2 requires part_number', exact=True)).to_be_visible()
+    expect(page.get_by_text('Delivery acknowledged to AMOScentral', exact=True)).to_be_visible()
     page.get_by_label('Data source').select_option('database')
     page.get_by_role('button', name='Save Configuration').click()
     page.get_by_role('button', name='Spec2500 processing', exact=True).click()

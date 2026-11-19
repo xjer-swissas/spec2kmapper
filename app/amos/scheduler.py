@@ -6,18 +6,6 @@ from app.amos.sync import claim_sync, run_tenant_sync
 scheduler = BackgroundScheduler()
 
 
-def expire_broker_snapshots():
-    from app.amos.central import receiver
-    if receiver.routing is None:
-        return
-    with SessionLocal() as db:
-        db.execute(text('''
-            UPDATE public.amoscentral_batches SET status='EXPIRED', exports='{}'::jsonb
-            WHERE status='PENDING' AND created_at < CURRENT_TIMESTAMP - make_interval(hours => :hours)
-        '''), {'hours': receiver.routing.pending_batch_hours})
-        db.commit()
-
-
 def sync_all_tenants():
     with SessionLocal() as db:
         tenants = db.execute(text("""
@@ -43,5 +31,4 @@ def start_scheduler():
         """))
         db.commit()
     scheduler.add_job(sync_all_tenants, 'interval', minutes=5, id='amos_sync_job', replace_existing=True)
-    scheduler.add_job(expire_broker_snapshots, 'interval', minutes=5, id='amoscentral_cleanup', replace_existing=True)
     scheduler.start()

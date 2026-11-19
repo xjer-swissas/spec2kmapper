@@ -19,19 +19,13 @@ connect_timeout = 5
 max_body_bytes = 26214400
 
 [routing]
-service = "com.example.spec2kmapper.export"
-service_version = "1.0.0"
-# Set product when the AMOShub integration provides amc_product.
-product = ""
-batch_header = "amc_correlation_id"
-# Prefer a shared snapshot timestamp when AMOS can provide one.
-# With amc_send_time, send the snapshots sequentially (do not interleave batches).
-snapshot_header = "amc_send_time"
-require_encryption = true
-pending_batch_limit = 10
-pending_batch_hours = 168
+export_type_header = "amc_2k5mapper_product_header"
+# Service is fixed to com.swiss-as.amos.aim.export_data_source.
+# The custom header selects the table.
+service_version = "1.0"
 
 [routing.data_source_ids]
+# Used only when export_type_header = "".
 parts = "parts"
 configurations = "configurations"
 documents = "documents"

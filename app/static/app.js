@@ -1,4 +1,5 @@
 function app() {
+  const connectionError = 'Cannot reach the server. Check your connection and try again.';
   return {
     token: localStorage.getItem('token') || null,
     tenantSchema: localStorage.getItem('schema') || '',
@@ -47,6 +48,7 @@ function app() {
         if (authenticated) headers.Authorization = `Bearer ${requestToken}`;
         const response = await fetch(url, { ...options, headers });
         if (authenticated && requestToken !== this.token) return null;
+        if (this.error === connectionError) this.error = '';
         if (response.status === 401 && authenticated) { this.expireSession(); return null; }
         if (!response.ok) {
           const data = await response.json().catch(() => ({}));
@@ -55,7 +57,9 @@ function app() {
         }
         return response;
       } catch (_) {
-        this.error = 'Cannot reach the server. Check your connection and try again.';
+        if (authenticated && requestToken !== this.token) return null;
+        this.error = (!options.method || options.method.toUpperCase() === 'GET')
+          ? connectionError : 'The request could not reach the server. Please try the action again.';
         return null;
       }
     },
